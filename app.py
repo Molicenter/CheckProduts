@@ -371,25 +371,27 @@ if buscar:
             col2.metric("Cód. Barra", info["CodBarra"])
             col3.metric("Estoque Total (todas as lojas)", f"{info['EstoqueTotal']:.0f}")
 
-            st.markdown("**📦 Estoque:**")
-            tabela_estoque = dict(info["EstoquePorLoja"])
-            tabela_estoque["Total"] = info["EstoqueTotal"]
-            st.dataframe(pd.DataFrame([tabela_estoque]), use_container_width=True, hide_index=True)
+            # Estoque e Preço na MESMA tabela (uma linha cada), pra ficar tudo
+            # alinhado por coluna de loja em vez de duas tabelas soltas.
+            tabela_combinada = pd.DataFrame(
+                {loja: [info["EstoquePorLoja"][loja], preco_para_texto(info["PrecoPorLoja"][loja])] for loja in LOJAS_NOMES},
+                index=["📦 Estoque", "💰 Preço"],
+            )
+            tabela_combinada["Total"] = [info["EstoqueTotal"], ""]
+            st.dataframe(tabela_combinada, use_container_width=True)
 
-            st.markdown("**💰 Preço:**")
-            tabela_preco = {loja: preco_para_texto(v) for loja, v in info["PrecoPorLoja"].items()}
-            st.dataframe(pd.DataFrame([tabela_preco]), use_container_width=True, hide_index=True)
-
-            linha_hist = {
+            base_hist = {
                 "Hora": data_hora_brasilia(),
                 "Usuário": st.session_state.usuario_logado,
                 "Produto": info["Produto"],
                 "Código": info["Codigo"],
                 "Cód. Barra": info["CodBarra"],
             }
-            linha_hist.update({f"{loja} (Estoque)": v for loja, v in info["EstoquePorLoja"].items()})
-            linha_hist["Total (Estoque)"] = info["EstoqueTotal"]
-            linha_hist.update({f"{loja} (Preço)": preco_para_texto(v) for loja, v in info["PrecoPorLoja"].items()})
+            linha_hist = {
+                **base_hist,
+                "Estoque": {**info["EstoquePorLoja"], "Total": info["EstoqueTotal"]},
+                "Preco": {loja: preco_para_texto(v) for loja, v in info["PrecoPorLoja"].items()},
+            }
             st.session_state.historico_scans.insert(0, linha_hist)
         else:
             st.error(f"❌ Nenhum produto encontrado com o código **{codigo_busca}**.")
@@ -401,4 +403,21 @@ if buscar:
 if st.session_state.historico_scans:
     st.divider()
     st.subheader("📋 Histórico desta sessão")
-    st.dataframe(pd.DataFrame(st.session_state.historico_scans), use_container_width=True, hide_index=True)
+
+    # .get(...) com fallback: protege contra entradas antigas no histórico da sessão
+    # (de antes desta atualização) que não tinham esse formato ainda.
+    _colunas_base = ["Hora", "Usuário", "Produto", "Código", "Cód. Barra"]
+    linhas_estoque = [
+        {**{c: h.get(c, "") for c in _colunas_base}, **h.get("Estoque", {})}
+        for h in st.session_state.historico_scans
+    ]
+    linhas_preco = [
+        {**{c: h.get(c, "") for c in _colunas_base}, **h.get("Preco", {})}
+        for h in st.session_state.historico_scans
+    ]
+
+    st.markdown("**📦 Estoque:**")
+    st.dataframe(pd.DataFrame(linhas_estoque), use_container_width=True, hide_index=True)
+
+    st.markdown("**💰 Preço:**")
+    st.dataframe(pd.DataFrame(linhas_preco), use_container_width=True, hide_index=True)
