@@ -1,3 +1,4 @@
+import base64
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -6,19 +7,85 @@ from datetime import datetime, timezone, timedelta
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 🔎 CONSULTA DE PRODUTO POR CÓDIGO DE BARRA (leitura via câmera)
-# Segue o mesmo padrão do app de Pedidos: mesma conexão "banco_erp" (st.connection),
-# mesma view python_estoque, mesmo esquema de LOJAS_NOMES e mesma chave ERP_ATIVO
-# no secrets para desligar a consulta em modo degradado quando necessário.
+# Mesmo padrão do app de Pedidos: conexão "banco_erp" (st.connection), view
+# python_estoque, chave ERP_ATIVO no secrets. Cores abaixo aproximam a
+# identidade visual do painel-pedidos (banner navy + botão vermelho #ff4b4b,
+# que é o valor exato usado lá). Se você tiver o config.toml/CSS exato do
+# painel-pedidos, me manda que eu ajusto certinho.
 # ─────────────────────────────────────────────────────────────────────────────
 
-st.set_page_config(page_title="Consulta Produto - Cód. Barra", page_icon="🔍", layout="centered")
+st.set_page_config(page_title="Check Produtos - Molicenter", page_icon="🔍", layout="centered")
 
 LOJAS_NOMES = ["Loja 01", "Loja 02", "Loja 03", "Loja 04", "Loja 05", "Loja 06", "Loja 07", "Loja 08"]
+LOJAS_CODIGOS = [f"{i:03d}" for i in range(1, len(LOJAS_NOMES) + 1)]
+
+# Senha fixa de acesso — gate simples (não é autenticação forte), conforme pedido.
+SENHA_ACESSO = "moli1234"
+
+COR_BANNER = "#122C43"          # navy do topo (telas internas)
+COR_SIDEBAR = "#132A41"         # navy da sidebar
+COR_BOTAO_SIDEBAR = "#ff4b4b"   # vermelho — confirmado no CSS do app de Pedidos (só botões da sidebar)
+COR_PRIMARIA = "#D6218C"        # rosa/magenta — cor de destaque global (ex.: "Entrar no Sistema")
+COR_TITULO_LOGIN = "#1B3A5C"    # navy do título "Portal de Pedidos"
+COR_SUBTITULO_LOGIN = "#2C6E8C"
+COR_LABEL_USUARIO = "#6C3FC5"   # roxo do rótulo "Usuário de acesso"
+COR_LABEL_SENHA = "#C77D02"     # âmbar do rótulo "Senha de acesso"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 🎨 CSS GLOBAL (sidebar navy + botão primário rosa/magenta, padrão do painel-pedidos)
+# ─────────────────────────────────────────────────────────────────────────────
+st.markdown(f"""
+    <style>
+    div.stButton > button[kind="primary"] {{
+        background-color: {COR_PRIMARIA} !important;
+        border-color: {COR_PRIMARIA} !important;
+        color: white !important;
+    }}
+    [data-testid="stSidebar"] {{
+        background-color: {COR_SIDEBAR} !important;
+    }}
+    [data-testid="stSidebar"] * {{
+        color: #ffffff !important;
+    }}
+    [data-testid="stSidebar"] button {{
+        background-color: {COR_BOTAO_SIDEBAR} !important;
+        color: white !important;
+        border-color: {COR_BOTAO_SIDEBAR} !important;
+    }}
+    </style>
+""", unsafe_allow_html=True)
+
+
+def _logo_base64() -> str:
+    # Espera "passaro_logo.png" na raiz do repositório, junto do app.py.
+    try:
+        with open("passaro_logo.png", "rb") as f:
+            return base64.b64encode(f.read()).decode()
+    except Exception:
+        return ""
+
+
+def desenhar_banner(subtitulo: str = ""):
+    logo_b64 = _logo_base64()
+    logo_tag = (
+        f'<img src="data:image/png;base64,{logo_b64}" style="height:38px;border-radius:4px;">'
+        if logo_b64 else '<span style="font-size:28px;">🦜</span>'
+    )
+    extra = f'<span style="font-size:14px;font-weight:400;opacity:.85;"> ---&gt; {subtitulo}</span>' if subtitulo else ""
+    st.markdown(f"""
+        <div style="background-color:{COR_BANNER};padding:14px 22px;border-radius:6px;
+                    display:flex;align-items:center;gap:14px;margin-bottom:20px;">
+            {logo_tag}
+            <div style="color:#ffffff;">
+                <span style="font-size:20px;font-weight:700;">🔍 Check Produtos - Molicenter</span>
+                {extra}
+            </div>
+        </div>
+    """, unsafe_allow_html=True)
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 🔌 CHAVE GERAL DO ERP (mesmo mecanismo do app de Pedidos)
-# Com ERP_ATIVO = false no secrets, a consulta é desligada (não dá pra buscar
-# produto sem o ERP, então aqui só exibimos um aviso e paramos a tela).
 # ─────────────────────────────────────────────────────────────────────────────
 ERP_ATIVO_PADRAO = True
 
@@ -42,13 +109,10 @@ def erp_ativo() -> bool:
 
 
 def data_hora_brasilia() -> str:
-    # Servidor roda em UTC; Brasília é UTC-3 fixo (sem horário de verão desde 2019).
     agora = datetime.now(timezone.utc) - timedelta(hours=3)
     return agora.strftime("%d/%m/%Y %H:%M:%S")
 
 
-# connect_timeout/statement_timeout: mesmo ajuste do app de Pedidos, pra não
-# travar a tela se o ERP não responder.
 conn_pg = st.connection(
     "banco_erp",
     type="sql",
@@ -56,11 +120,7 @@ conn_pg = st.connection(
 )
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 📷 LEITURA DO CÓDIGO DE BARRA NA FOTO
-# Tenta primeiro com pyzbar (mais preciso; precisa da lib de sistema libzbar0,
-# ver packages.txt). Se pyzbar não estiver disponível, cai no detector nativo
-# do OpenCV (funciona só com pip, sem lib de sistema, porém menos robusto).
-# Em qualquer caso, o campo de texto abaixo permite digitar o código manualmente.
+# 📷 LEITURA DO CÓDIGO DE BARRA NA FOTO (pyzbar, com fallback no OpenCV)
 # ─────────────────────────────────────────────────────────────────────────────
 try:
     from pyzbar.pyzbar import decode as _zbar_decode
@@ -70,8 +130,6 @@ except Exception:
 
 
 def decodificar_codigo_barra(imagem_bytes: bytes) -> list:
-    """Recebe os bytes de uma foto e devolve a lista de códigos de barra achados
-    (string), na ordem em que foram encontrados, sem repetição."""
     arr = np.frombuffer(imagem_bytes, dtype=np.uint8)
     img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
     if img is None:
@@ -105,7 +163,6 @@ def decodificar_codigo_barra(imagem_bytes: bytes) -> list:
 
 
 def preco_para_texto(v) -> str:
-    # Mesmo formato usado no app de Pedidos ("R$ 12,50").
     if v is None or (isinstance(v, float) and pd.isna(v)):
         return "-"
     try:
@@ -115,64 +172,143 @@ def preco_para_texto(v) -> str:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 🔍 CONSULTA NO BANCO (view python_estoque — mesma usada em buscar_estoque_erp)
+# 🔍 CONSULTA NO BANCO — agora em TODAS as lojas de uma vez (sem seletor de loja)
 # ─────────────────────────────────────────────────────────────────────────────
+_PLACEHOLDERS_LOJAS = ", ".join(f"'{c}'" for c in LOJAS_CODIGOS)  # constantes fixas, não é input do usuário
+
+
 @st.cache_data(ttl=15, show_spinner=False)
-def buscar_produto_por_barra(loja_id_str: str, codigo_barra: str) -> pd.DataFrame:
-    query = """
-        SELECT cade_codigo      AS "Codigo",
+def buscar_produto_todas_lojas(codigo_barra: str):
+    query = f"""
+        SELECT cade_codempresa   AS "Loja",
+               cade_codigo       AS "Codigo",
                cadp_descricao    AS "Produto",
                cadp_codigobarra  AS "CodBarra",
                estoque           AS "Estoque",
                prvenda           AS "Preco"
         FROM python_estoque
-        WHERE cade_codempresa = :loja
-          AND cadp_codigobarra = :barra
+        WHERE cadp_codigobarra = :barra
+          AND cade_codempresa IN ({_PLACEHOLDERS_LOJAS})
     """
-    return conn_pg.query(query, params={"loja": loja_id_str, "barra": codigo_barra}, ttl=15)
+    df = conn_pg.query(query, params={"barra": codigo_barra}, ttl=15)
+    if df is None or df.empty:
+        return None
+
+    def _primeiro_nao_nulo(col):
+        serie = df[col].dropna()
+        return serie.iloc[0] if not serie.empty else None
+
+    codigo_prod = _primeiro_nao_nulo("Codigo")
+    info = {
+        "Produto": _primeiro_nao_nulo("Produto") or "-",
+        "Codigo": int(codigo_prod) if codigo_prod is not None else None,
+        "CodBarra": _primeiro_nao_nulo("CodBarra") or codigo_barra,
+        "Preco": _primeiro_nao_nulo("Preco"),
+    }
+    estoque_por_loja = {}
+    for nome, cod in zip(LOJAS_NOMES, LOJAS_CODIGOS):
+        linha = df[df["Loja"] == cod]
+        valor = linha["Estoque"].iloc[0] if not linha.empty else None
+        estoque_por_loja[nome] = float(valor) if pd.notna(valor) else 0.0
+    info["EstoquePorLoja"] = estoque_por_loja
+    return info
 
 
-def buscar_produto_parecido(loja_id_str: str, codigo_barra: str) -> pd.DataFrame:
-    # Fallback quando não acha o código exato: tenta um LIKE (ex.: dígito
-    # verificador diferente / EAN-13 gravado como UPC-A de 12 dígitos etc.).
-    query = """
-        SELECT cade_codigo      AS "Codigo",
-               cadp_descricao    AS "Produto",
-               cadp_codigobarra  AS "CodBarra",
-               estoque           AS "Estoque",
-               prvenda           AS "Preco"
+def buscar_produtos_parecidos(codigo_barra: str) -> pd.DataFrame:
+    query = f"""
+        SELECT DISTINCT cade_codigo AS "Código", cadp_descricao AS "Produto",
+               cadp_codigobarra AS "Cód. Barra", prvenda AS "Preço"
         FROM python_estoque
-        WHERE cade_codempresa = :loja
-          AND cadp_codigobarra ILIKE :busca
+        WHERE cadp_codigobarra ILIKE :busca
+          AND cade_codempresa IN ({_PLACEHOLDERS_LOJAS})
         LIMIT 10
     """
     busca = f"%{codigo_barra.strip().lstrip('0')}%" if codigo_barra.strip() else "%"
     try:
-        return conn_pg.query(query, params={"loja": loja_id_str, "busca": busca}, ttl=15)
+        return conn_pg.query(query, params={"busca": busca}, ttl=15)
     except Exception:
         return pd.DataFrame()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 🖥️ INTERFACE
+# 🔒 LOGIN (gate simples — usuário livre + senha fixa)
 # ─────────────────────────────────────────────────────────────────────────────
-st.title("🔍 Consulta de Produto por Código de Barra")
-st.caption("Uso em visita de loja: fotografe o código de barras do produto para ver estoque e preço na hora.")
+if "autenticado" not in st.session_state:
+    st.session_state.autenticado = False
+if "usuario_logado" not in st.session_state:
+    st.session_state.usuario_logado = ""
+if "historico_scans" not in st.session_state:
+    st.session_state.historico_scans = []
 
+if not st.session_state.autenticado:
+    st.write("")  # respiro no topo, igual ao Portal de Pedidos
+    st.write("")
+    col_esq, col_meio, col_dir = st.columns([1, 2, 1])
+    with col_meio:
+        with st.container(border=True):
+            col_titulo, col_logo = st.columns([4, 1])
+            with col_titulo:
+                st.markdown(
+                    f"<h2 style='color:{COR_TITULO_LOGIN};margin-bottom:2px;'>Check Produtos</h2>"
+                    f"<p style='color:{COR_SUBTITULO_LOGIN};margin-top:0;font-size:14px;'>"
+                    f"Consulta por Código de Barra — Molicenter</p>",
+                    unsafe_allow_html=True,
+                )
+            with col_logo:
+                logo_b64 = _logo_base64()
+                if logo_b64:
+                    st.markdown(
+                        f'<div style="text-align:right;"><img src="data:image/png;base64,{logo_b64}" '
+                        f'style="height:46px;"></div>',
+                        unsafe_allow_html=True,
+                    )
+                else:
+                    st.markdown("<div style='text-align:right;font-size:34px;'>🦜</div>", unsafe_allow_html=True)
+
+            st.divider()
+
+            st.markdown(
+                f"<span style='color:{COR_LABEL_USUARIO};font-weight:600;'>👤 Usuário de acesso:</span>",
+                unsafe_allow_html=True,
+            )
+            usuario = st.text_input("Usuário de acesso", label_visibility="collapsed", placeholder="Digite seu nome")
+
+            st.markdown(
+                f"<span style='color:{COR_LABEL_SENHA};font-weight:600;'>🔑 Senha de acesso:</span>",
+                unsafe_allow_html=True,
+            )
+            senha = st.text_input("Senha de acesso", type="password", label_visibility="collapsed")
+
+            st.write("")
+            if st.button("Entrar no Sistema", type="primary", use_container_width=True):
+                if not usuario.strip():
+                    st.error("Informe o usuário.")
+                elif senha != SENHA_ACESSO:
+                    st.error("Senha incorreta.")
+                else:
+                    st.session_state.autenticado = True
+                    st.session_state.usuario_logado = usuario.strip()
+                    st.rerun()
+    st.stop()
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 🖥️ INTERFACE (já autenticado)
+# ─────────────────────────────────────────────────────────────────────────────
 with st.sidebar:
-    st.header("⚙️ Loja")
-    loja_nome = st.selectbox("Selecione a loja", LOJAS_NOMES)
-    loja_id = int(loja_nome.split()[-1])
-    loja_id_str = f"{loja_id:03d}"
-
+    st.markdown(f"### 👤 {st.session_state.usuario_logado}")
+    if st.button("🚪 Sair", use_container_width=True):
+        st.session_state.autenticado = False
+        st.session_state.usuario_logado = ""
+        st.rerun()
     st.divider()
-    if "historico_scans" not in st.session_state:
-        st.session_state.historico_scans = []
     if st.session_state.historico_scans:
         st.caption(f"📋 {len(st.session_state.historico_scans)} produto(s) consultado(s) nesta sessão")
         if st.button("🧹 Limpar histórico", use_container_width=True):
             st.session_state.historico_scans = []
             st.rerun()
+
+desenhar_banner(subtitulo=f"Usuário: {st.session_state.usuario_logado}")
+st.caption("Fotografe o código de barras do produto para ver o estoque em todas as lojas e o preço na hora.")
 
 if not erp_ativo():
     st.warning(
@@ -181,7 +317,6 @@ if not erp_ativo():
     )
     st.stop()
 
-# Estado do código já lido/digitado, para o campo de texto reaproveitar entre reruns.
 if "codigo_barra_atual" not in st.session_state:
     st.session_state.codigo_barra_atual = ""
 
@@ -214,44 +349,39 @@ if buscar:
     else:
         st.session_state.codigo_barra_atual = codigo_busca
         try:
-            with st.spinner("Consultando..."):
-                df = buscar_produto_por_barra(loja_id_str, codigo_busca)
+            with st.spinner("Consultando em todas as lojas..."):
+                info = buscar_produto_todas_lojas(codigo_busca)
         except Exception as e:
             st.error(f"Erro ao consultar o produto: {e}")
-            df = pd.DataFrame()
+            info = None
 
-        if df is not None and not df.empty:
-            row = df.iloc[0]
+        if info is not None:
             st.divider()
-            st.markdown(f"### {row['Produto']}")
-            col1, col2 = st.columns(2)
-            col1.metric("Código do Produto", int(row["Codigo"]))
-            col2.metric("Cód. Barra", row["CodBarra"])
-            col3, col4 = st.columns(2)
-            estoque_val = row["Estoque"]
-            col3.metric("Estoque", f"{estoque_val:.0f}" if pd.notna(estoque_val) else "0")
-            col4.metric("Preço de Venda", preco_para_texto(row["Preco"]))
+            st.markdown(f"### {info['Produto']}")
+            col1, col2, col3 = st.columns(3)
+            col1.metric("Código do Produto", info["Codigo"] if info["Codigo"] is not None else "-")
+            col2.metric("Cód. Barra", info["CodBarra"])
+            col3.metric("Preço de Venda", preco_para_texto(info["Preco"]))
 
-            st.session_state.historico_scans.insert(0, {
+            st.markdown("**📦 Estoque por loja:**")
+            st.dataframe(pd.DataFrame([info["EstoquePorLoja"]]), use_container_width=True, hide_index=True)
+
+            linha_hist = {
                 "Hora": data_hora_brasilia(),
-                "Loja": loja_nome,
-                "Código": int(row["Codigo"]),
-                "Produto": row["Produto"],
-                "Cód. Barra": row["CodBarra"],
-                "Estoque": estoque_val,
-                "Preço": preco_para_texto(row["Preco"]),
-            })
+                "Usuário": st.session_state.usuario_logado,
+                "Produto": info["Produto"],
+                "Código": info["Codigo"],
+                "Cód. Barra": info["CodBarra"],
+                "Preço": preco_para_texto(info["Preco"]),
+            }
+            linha_hist.update(info["EstoquePorLoja"])
+            st.session_state.historico_scans.insert(0, linha_hist)
         else:
-            st.error(f"❌ Nenhum produto encontrado com o código **{codigo_busca}** na {loja_nome}.")
-            sugestoes = buscar_produto_parecido(loja_id_str, codigo_busca)
+            st.error(f"❌ Nenhum produto encontrado com o código **{codigo_busca}**.")
+            sugestoes = buscar_produtos_parecidos(codigo_busca)
             if sugestoes is not None and not sugestoes.empty:
-                st.caption("Produtos com código de barra parecido, encontrados nesta loja:")
-                st.dataframe(
-                    sugestoes.rename(columns={
-                        "Codigo": "Código", "CodBarra": "Cód. Barra", "Preco": "Preço",
-                    }),
-                    use_container_width=True, hide_index=True,
-                )
+                st.caption("Produtos com código de barra parecido:")
+                st.dataframe(sugestoes, use_container_width=True, hide_index=True)
 
 if st.session_state.historico_scans:
     st.divider()
