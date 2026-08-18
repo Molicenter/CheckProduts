@@ -282,6 +282,10 @@ if not st.session_state.autenticado:
                 unsafe_allow_html=True,
             )
             senha = st.text_input("Senha de acesso", type="password", label_visibility="collapsed")
+            if senha:
+                # 🔧 Debug temporário — remover depois de descobrir a causa do "Senha incorreta".
+                # Mostra só o TAMANHO do que chegou no campo, nunca o conteúdo.
+                st.caption(f"🔧 debug: {len(senha)} caractere(s) recebido(s) no campo senha (esperado: {len(SENHA_ACESSO)}).")
 
             st.write("")
             if st.button("Entrar no Sistema", type="primary", use_container_width=True):
