@@ -14,7 +14,7 @@ from datetime import datetime, timezone, timedelta
 # painel-pedidos, me manda que eu ajusto certinho.
 # ─────────────────────────────────────────────────────────────────────────────
 
-st.set_page_config(page_title="Check Produtos - Molicenter", page_icon="🔍", layout="centered")
+st.set_page_config(page_title="Check Produtos - Molicenter", page_icon="🔍", layout="wide")
 
 LOJAS_NOMES = ["Loja 01", "Loja 02", "Loja 03", "Loja 04", "Loja 05", "Loja 06", "Loja 07", "Loja 08"]
 LOJAS_CODIGOS = [f"{i:03d}" for i in range(1, len(LOJAS_NOMES) + 1)]
@@ -203,14 +203,18 @@ def buscar_produto_todas_lojas(codigo_barra: str):
         "Produto": _primeiro_nao_nulo("Produto") or "-",
         "Codigo": int(codigo_prod) if codigo_prod is not None else None,
         "CodBarra": _primeiro_nao_nulo("CodBarra") or codigo_barra,
-        "Preco": _primeiro_nao_nulo("Preco"),
     }
     estoque_por_loja = {}
+    preco_por_loja = {}
     for nome, cod in zip(LOJAS_NOMES, LOJAS_CODIGOS):
         linha = df[df["Loja"] == cod]
-        valor = linha["Estoque"].iloc[0] if not linha.empty else None
-        estoque_por_loja[nome] = float(valor) if pd.notna(valor) else 0.0
+        valor_estoque = linha["Estoque"].iloc[0] if not linha.empty else None
+        valor_preco = linha["Preco"].iloc[0] if not linha.empty else None
+        estoque_por_loja[nome] = float(valor_estoque) if pd.notna(valor_estoque) else 0.0
+        preco_por_loja[nome] = valor_preco if pd.notna(valor_preco) else None
     info["EstoquePorLoja"] = estoque_por_loja
+    info["EstoqueTotal"] = sum(estoque_por_loja.values())
+    info["PrecoPorLoja"] = preco_por_loja
     return info
 
 
@@ -361,10 +365,16 @@ if buscar:
             col1, col2, col3 = st.columns(3)
             col1.metric("Código do Produto", info["Codigo"] if info["Codigo"] is not None else "-")
             col2.metric("Cód. Barra", info["CodBarra"])
-            col3.metric("Preço de Venda", preco_para_texto(info["Preco"]))
+            col3.metric("Estoque Total (todas as lojas)", f"{info['EstoqueTotal']:.0f}")
 
-            st.markdown("**📦 Estoque por loja:**")
-            st.dataframe(pd.DataFrame([info["EstoquePorLoja"]]), use_container_width=True, hide_index=True)
+            st.markdown("**📦 Estoque:**")
+            tabela_estoque = dict(info["EstoquePorLoja"])
+            tabela_estoque["Total"] = info["EstoqueTotal"]
+            st.dataframe(pd.DataFrame([tabela_estoque]), use_container_width=True, hide_index=True)
+
+            st.markdown("**💰 Preço:**")
+            tabela_preco = {loja: preco_para_texto(v) for loja, v in info["PrecoPorLoja"].items()}
+            st.dataframe(pd.DataFrame([tabela_preco]), use_container_width=True, hide_index=True)
 
             linha_hist = {
                 "Hora": data_hora_brasilia(),
@@ -372,9 +382,10 @@ if buscar:
                 "Produto": info["Produto"],
                 "Código": info["Codigo"],
                 "Cód. Barra": info["CodBarra"],
-                "Preço": preco_para_texto(info["Preco"]),
             }
-            linha_hist.update(info["EstoquePorLoja"])
+            linha_hist.update({f"{loja} (Estoque)": v for loja, v in info["EstoquePorLoja"].items()})
+            linha_hist["Total (Estoque)"] = info["EstoqueTotal"]
+            linha_hist.update({f"{loja} (Preço)": preco_para_texto(v) for loja, v in info["PrecoPorLoja"].items()})
             st.session_state.historico_scans.insert(0, linha_hist)
         else:
             st.error(f"❌ Nenhum produto encontrado com o código **{codigo_busca}**.")
