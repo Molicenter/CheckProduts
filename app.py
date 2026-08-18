@@ -271,24 +271,30 @@ if not st.session_state.autenticado:
 
             st.divider()
 
-            st.markdown(
-                f"<span style='color:{COR_LABEL_USUARIO};font-weight:600;'>👤 Usuário de acesso:</span>",
-                unsafe_allow_html=True,
-            )
-            usuario = st.text_input("Usuário de acesso", label_visibility="collapsed", placeholder="Digite seu nome")
+            # st.form: captura todos os campos juntos no clique do botão, sem
+            # depender do usuário apertar Enter em cada campo antes (era essa a
+            # causa do "Senha incorreta" — o clique lia o valor antigo/vazio).
+            with st.form("form_login", clear_on_submit=False):
+                st.markdown(
+                    f"<span style='color:{COR_LABEL_USUARIO};font-weight:600;'>👤 Usuário de acesso:</span>",
+                    unsafe_allow_html=True,
+                )
+                usuario = st.text_input(
+                    "Usuário de acesso", label_visibility="collapsed", placeholder="Digite seu nome"
+                )
 
-            st.markdown(
-                f"<span style='color:{COR_LABEL_SENHA};font-weight:600;'>🔑 Senha de acesso:</span>",
-                unsafe_allow_html=True,
-            )
-            senha = st.text_input("Senha de acesso", type="password", label_visibility="collapsed")
-            if senha:
-                # 🔧 Debug temporário — remover depois de descobrir a causa do "Senha incorreta".
-                # Mostra só o TAMANHO do que chegou no campo, nunca o conteúdo.
-                st.caption(f"🔧 debug: {len(senha)} caractere(s) recebido(s) no campo senha (esperado: {len(SENHA_ACESSO)}).")
+                st.markdown(
+                    f"<span style='color:{COR_LABEL_SENHA};font-weight:600;'>🔑 Senha de acesso:</span>",
+                    unsafe_allow_html=True,
+                )
+                senha = st.text_input("Senha de acesso", type="password", label_visibility="collapsed")
 
-            st.write("")
-            if st.button("Entrar no Sistema", type="primary", use_container_width=True):
+                st.write("")
+                entrar = st.form_submit_button(
+                    "Entrar no Sistema", type="primary", use_container_width=True
+                )
+
+            if entrar:
                 if not usuario.strip():
                     st.error("Informe o usuário.")
                 elif senha.strip() != SENHA_ACESSO:
