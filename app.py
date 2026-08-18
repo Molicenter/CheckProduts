@@ -287,7 +287,7 @@ if not st.session_state.autenticado:
             if st.button("Entrar no Sistema", type="primary", use_container_width=True):
                 if not usuario.strip():
                     st.error("Informe o usuário.")
-                elif senha != SENHA_ACESSO:
+                elif senha.strip() != SENHA_ACESSO:
                     st.error("Senha incorreta.")
                 else:
                     st.session_state.autenticado = True
