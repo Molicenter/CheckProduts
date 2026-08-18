@@ -324,27 +324,31 @@ if not erp_ativo():
 if "codigo_barra_atual" not in st.session_state:
     st.session_state.codigo_barra_atual = ""
 
-foto = st.camera_input("📷 Fotografar o código de barras")
-if foto is not None:
-    codigos_encontrados = decodificar_codigo_barra(foto.getvalue())
-    if codigos_encontrados:
-        st.session_state.codigo_barra_atual = codigos_encontrados[0]
-        st.success(f"✅ Código lido: **{codigos_encontrados[0]}**")
-        if len(codigos_encontrados) > 1:
-            st.caption("Outros códigos detectados na mesma foto: " + ", ".join(codigos_encontrados[1:]))
-    else:
-        st.warning(
-            "⚠️ Não consegui ler nenhum código de barras nessa foto. "
-            "Tente de novo com mais luz e foco, ou digite o código abaixo."
-        )
+# Câmera/entrada ficam numa coluna central estreita — só as tabelas de resultado
+# usam a largura toda da tela (é o vídeo da câmera que fica gigante em layout wide).
+col_busca_esq, col_busca_meio, col_busca_dir = st.columns([1, 2, 1])
+with col_busca_meio:
+    foto = st.camera_input("📷 Fotografar o código de barras")
+    if foto is not None:
+        codigos_encontrados = decodificar_codigo_barra(foto.getvalue())
+        if codigos_encontrados:
+            st.session_state.codigo_barra_atual = codigos_encontrados[0]
+            st.success(f"✅ Código lido: **{codigos_encontrados[0]}**")
+            if len(codigos_encontrados) > 1:
+                st.caption("Outros códigos detectados na mesma foto: " + ", ".join(codigos_encontrados[1:]))
+        else:
+            st.warning(
+                "⚠️ Não consegui ler nenhum código de barras nessa foto. "
+                "Tente de novo com mais luz e foco, ou digite o código abaixo."
+            )
 
-codigo_manual = st.text_input(
-    "Ou digite o código manualmente",
-    value=st.session_state.codigo_barra_atual,
-    placeholder="Ex: 7891149200504",
-)
+    codigo_manual = st.text_input(
+        "Ou digite o código manualmente",
+        value=st.session_state.codigo_barra_atual,
+        placeholder="Ex: 7891149200504",
+    )
 
-buscar = st.button("🔎 Buscar produto", type="primary", use_container_width=True)
+    buscar = st.button("🔎 Buscar produto", type="primary", use_container_width=True)
 
 if buscar:
     codigo_busca = codigo_manual.strip()
