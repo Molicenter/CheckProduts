@@ -422,13 +422,14 @@ def gerar_pdf_ronda(df_erros: pd.DataFrame, loja_ronda: str) -> bytes:
     historia.append(Paragraph(f"Gerado em: {data_hora_brasilia()}", estilos["Normal"]))
     historia.append(Spacer(1, 0.6 * cm))
 
-    cabecalho = ["Hora", "Produto", "Código", "Cód. Barra", "Preço no sistema", "Observação"]
+    # Sem coluna de hora/data (já sai no "Gerado em" acima) — menos colunas
+    # ajuda cada linha a caber inteira sem quebrar em várias linhas.
+    cabecalho = ["Código", "Produto", "Cód. Barra", "R$", "Observação"]
     linhas = [cabecalho]
     for _, e in df_erros.iterrows():
         linhas.append([
-            Paragraph(str(e.get("hora_texto", "-") or "-"), estilos["Normal"]),
-            Paragraph(str(e.get("produto", "-") or "-"), estilos["Normal"]),
             Paragraph(str(e.get("codigo", "-") or "-"), estilos["Normal"]),
+            Paragraph(str(e.get("produto", "-") or "-"), estilos["Normal"]),
             Paragraph(str(e.get("codigo_barra", "-") or "-"), estilos["Normal"]),
             Paragraph(str(e.get("preco_sistema", "-") or "-"), estilos["Normal"]),
             Paragraph(str(e.get("observacao", "") or "-"), estilos["Normal"]),
@@ -436,7 +437,7 @@ def gerar_pdf_ronda(df_erros: pd.DataFrame, loja_ronda: str) -> bytes:
 
     tabela = Table(
         linhas,
-        colWidths=[2.0 * cm, 5.5 * cm, 2.0 * cm, 3.0 * cm, 3.0 * cm, 4.0 * cm],
+        colWidths=[2.2 * cm, 6.5 * cm, 3.3 * cm, 2.0 * cm, 4.0 * cm],
         repeatRows=1,
     )
     tabela.setStyle(TableStyle([
