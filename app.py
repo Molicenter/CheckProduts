@@ -359,7 +359,8 @@ if "ultimo_codigo_auto" not in st.session_state:
 
 # Câmera/entrada ficam numa coluna central estreita — só as tabelas de resultado
 # usam a largura toda da tela (é o vídeo da câmera que fica gigante em layout wide).
-codigo_auto = None
+codigo_auto = None              # só tem valor quando é um código NOVO (pra gravar no histórico)
+codigo_lido_nesta_rodada = None  # tem valor sempre que a foto decodificou algo, novo ou repetido
 col_busca_esq, col_busca_meio, col_busca_dir = st.columns([1, 2, 1])
 with col_busca_meio:
     st.markdown("**📷 Fotografar o código de barras**")
@@ -373,12 +374,13 @@ with col_busca_meio:
         codigos_encontrados = decodificar_codigo_barra(foto.getvalue())
         if codigos_encontrados:
             codigo_lido = codigos_encontrados[0]
+            codigo_lido_nesta_rodada = codigo_lido
             st.session_state.codigo_barra_atual = codigo_lido
             st.success(f"✅ Código lido: **{codigo_lido}**")
             if len(codigos_encontrados) > 1:
                 st.caption("Outros códigos detectados na mesma foto: " + ", ".join(codigos_encontrados[1:]))
             if codigo_lido != st.session_state.ultimo_codigo_auto:
-                # código novo (foto nova ou primeira leitura) — busca sozinho, sem precisar clicar
+                # código novo (foto nova ou primeira leitura) — só isso conta pro histórico
                 st.session_state.ultimo_codigo_auto = codigo_lido
                 codigo_auto = codigo_lido
         else:
@@ -395,18 +397,18 @@ with col_busca_meio:
 
     buscar_manual = st.button("🔎 Buscar produto", type="primary", use_container_width=True)
 
-codigo_busca = codigo_auto or (codigo_manual.strip() if buscar_manual else None)
-
-if buscar_manual and not codigo_manual.strip():
-    st.error("Digite ou fotografe um código de barra antes de buscar.")
-elif codigo_busca:
+def mostrar_resultado(codigo_busca: str, registrar_historico: bool):
+    # Função única pra exibir o resultado — chamada tanto pela leitura automática
+    # da câmera quanto pelo botão manual. registrar_historico=False evita duplicar
+    # linha no histórico quando a MESMA foto é reprocessada em reruns seguidos
+    # (o resultado sempre aparece na tela; só o histórico não duplica).
     st.session_state.codigo_barra_atual = codigo_busca
     try:
         with st.spinner("Consultando em todas as lojas..."):
             info = buscar_produto_todas_lojas(codigo_busca)
     except Exception as e:
         st.error(f"Erro ao consultar o produto: {e}")
-        info = None
+        return
 
     if info is not None:
         st.divider()
@@ -427,25 +429,36 @@ elif codigo_busca:
         tabela_combinada = pd.DataFrame(linhas_tabela).set_index("Loja")
         st.dataframe(tabela_combinada, use_container_width=True)
 
-        base_hist = {
-            "Hora": data_hora_brasilia(),
-            "Usuário": st.session_state.usuario_logado,
-            "Produto": info["Produto"],
-            "Código": info["Codigo"],
-            "Cód. Barra": info["CodBarra"],
-        }
-        linha_hist = {
-            **base_hist,
-            "Estoque": {**info["EstoquePorLoja"], "Total": info["EstoqueTotal"]},
-            "Preco": {loja: preco_para_texto(v) for loja, v in info["PrecoPorLoja"].items()},
-        }
-        st.session_state.historico_scans.insert(0, linha_hist)
+        if registrar_historico:
+            base_hist = {
+                "Hora": data_hora_brasilia(),
+                "Usuário": st.session_state.usuario_logado,
+                "Produto": info["Produto"],
+                "Código": info["Codigo"],
+                "Cód. Barra": info["CodBarra"],
+            }
+            linha_hist = {
+                **base_hist,
+                "Estoque": {**info["EstoquePorLoja"], "Total": info["EstoqueTotal"]},
+                "Preco": {loja: preco_para_texto(v) for loja, v in info["PrecoPorLoja"].items()},
+            }
+            st.session_state.historico_scans.insert(0, linha_hist)
     else:
         st.error(f"❌ Nenhum produto encontrado com o código **{codigo_busca}**.")
         sugestoes = buscar_produtos_parecidos(codigo_busca)
         if sugestoes is not None and not sugestoes.empty:
             st.caption("Produtos com código de barra parecido:")
             st.dataframe(sugestoes, use_container_width=True, hide_index=True)
+
+
+if buscar_manual and not codigo_manual.strip():
+    st.error("Digite ou fotografe um código de barra antes de buscar.")
+elif codigo_lido_nesta_rodada:
+    # Câmera leu um código nesta mesma execução — mostra o resultado NA HORA,
+    # sem esperar clique nenhum. Só grava no histórico se for código novo.
+    mostrar_resultado(codigo_lido_nesta_rodada, registrar_historico=bool(codigo_auto))
+elif buscar_manual:
+    mostrar_resultado(codigo_manual.strip(), registrar_historico=True)
 
 if st.session_state.historico_scans:
     st.divider()
