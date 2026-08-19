@@ -381,13 +381,15 @@ if buscar:
             col2.metric("Cód. Barra", info["CodBarra"])
             col3.metric("Estoque Total (todas as lojas)", f"{info['EstoqueTotal']:.0f}")
 
-            # Estoque e Preço na MESMA tabela (uma linha cada), pra ficar tudo
-            # alinhado por coluna de loja em vez de duas tabelas soltas.
-            tabela_combinada = pd.DataFrame(
-                {loja: [info["EstoquePorLoja"][loja], preco_para_texto(info["PrecoPorLoja"][loja])] for loja in LOJAS_NOMES},
-                index=["📦 Estoque", "💰 Preço"],
-            )
-            tabela_combinada["Total"] = [info["EstoqueTotal"], ""]
+            # Lojas em LINHA e Estoque/Preço em COLUNA — cabe na tela do celular sem
+            # rolar pros lados (o formato anterior, loja por coluna, ficava cortado
+            # no mobile com só 4 das 8 lojas visíveis).
+            linhas_tabela = [
+                {"Loja": loja, "📦 Estoque": info["EstoquePorLoja"][loja], "💰 Preço": preco_para_texto(info["PrecoPorLoja"][loja])}
+                for loja in LOJAS_NOMES
+            ]
+            linhas_tabela.append({"Loja": "Total", "📦 Estoque": info["EstoqueTotal"], "💰 Preço": ""})
+            tabela_combinada = pd.DataFrame(linhas_tabela).set_index("Loja")
             st.dataframe(tabela_combinada, use_container_width=True)
 
             base_hist = {
@@ -414,20 +416,17 @@ if st.session_state.historico_scans:
     st.divider()
     st.subheader("📋 Histórico desta sessão")
 
-    # .get(...) com fallback: protege contra entradas antigas no histórico da sessão
-    # (de antes desta atualização) que não tinham esse formato ainda.
-    _colunas_base = ["Hora", "Usuário", "Produto", "Código", "Cód. Barra"]
-    linhas_estoque = [
-        {**{c: h.get(c, "") for c in _colunas_base}, **h.get("Estoque", {})}
-        for h in st.session_state.historico_scans
-    ]
-    linhas_preco = [
-        {**{c: h.get(c, "") for c in _colunas_base}, **h.get("Preco", {})}
-        for h in st.session_state.historico_scans
-    ]
-
-    st.markdown("**📦 Estoque:**")
-    st.dataframe(pd.DataFrame(linhas_estoque), use_container_width=True, hide_index=True)
-
-    st.markdown("**💰 Preço:**")
-    st.dataframe(pd.DataFrame(linhas_preco), use_container_width=True, hide_index=True)
+    # Cada consulta vira um cartão dobrável, com loja em LINHA (não em coluna) —
+    # mesmo motivo do resultado principal: no celular, 8 lojas em coluna cortam a tela.
+    for h in st.session_state.historico_scans:
+        titulo = f"{h.get('Hora', '')} — {h.get('Produto', '-')} (Cód. {h.get('Código', '-')})"
+        with st.expander(titulo):
+            st.caption(f"Usuário: {h.get('Usuário', '-')} · Cód. Barra: {h.get('Cód. Barra', '-')}")
+            estoque_h = h.get("Estoque", {})
+            preco_h = h.get("Preco", {})
+            linhas = [
+                {"Loja": loja, "📦 Estoque": estoque_h.get(loja, ""), "💰 Preço": preco_h.get(loja, "")}
+                for loja in LOJAS_NOMES
+            ]
+            linhas.append({"Loja": "Total", "📦 Estoque": estoque_h.get("Total", ""), "💰 Preço": ""})
+            st.dataframe(pd.DataFrame(linhas).set_index("Loja"), use_container_width=True)
