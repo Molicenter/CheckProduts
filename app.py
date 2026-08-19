@@ -14,7 +14,12 @@ from datetime import datetime, timezone, timedelta
 # painel-pedidos, me manda que eu ajusto certinho.
 # ─────────────────────────────────────────────────────────────────────────────
 
-st.set_page_config(page_title="Check Produtos - Molicenter", page_icon="🔍", layout="wide")
+st.set_page_config(
+    page_title="Check Produtos - Molicenter",
+    page_icon="🔍",
+    layout="wide",
+    initial_sidebar_state="collapsed",  # começa fechada — usuário abre pelo ">" se precisar
+)
 
 LOJAS_NOMES = ["Loja 01", "Loja 02", "Loja 03", "Loja 04", "Loja 05", "Loja 06", "Loja 07", "Loja 08"]
 LOJAS_CODIGOS = [f"{i:03d}" for i in range(1, len(LOJAS_NOMES) + 1)]
@@ -333,19 +338,29 @@ if not erp_ativo():
 
 if "codigo_barra_atual" not in st.session_state:
     st.session_state.codigo_barra_atual = ""
+if "ultimo_codigo_auto" not in st.session_state:
+    # guarda o último código já buscado automaticamente pela câmera, pra não
+    # repetir a busca (e duplicar o histórico) a cada rerun sem uma foto nova.
+    st.session_state.ultimo_codigo_auto = None
 
 # Câmera/entrada ficam numa coluna central estreita — só as tabelas de resultado
 # usam a largura toda da tela (é o vídeo da câmera que fica gigante em layout wide).
+codigo_auto = None
 col_busca_esq, col_busca_meio, col_busca_dir = st.columns([1, 2, 1])
 with col_busca_meio:
     foto = st.camera_input("📷 Fotografar o código de barras")
     if foto is not None:
         codigos_encontrados = decodificar_codigo_barra(foto.getvalue())
         if codigos_encontrados:
-            st.session_state.codigo_barra_atual = codigos_encontrados[0]
-            st.success(f"✅ Código lido: **{codigos_encontrados[0]}**")
+            codigo_lido = codigos_encontrados[0]
+            st.session_state.codigo_barra_atual = codigo_lido
+            st.success(f"✅ Código lido: **{codigo_lido}**")
             if len(codigos_encontrados) > 1:
                 st.caption("Outros códigos detectados na mesma foto: " + ", ".join(codigos_encontrados[1:]))
+            if codigo_lido != st.session_state.ultimo_codigo_auto:
+                # código novo (foto nova ou primeira leitura) — busca sozinho, sem precisar clicar
+                st.session_state.ultimo_codigo_auto = codigo_lido
+                codigo_auto = codigo_lido
         else:
             st.warning(
                 "⚠️ Não consegui ler nenhum código de barras nessa foto. "
@@ -358,59 +373,59 @@ with col_busca_meio:
         placeholder="Ex: 7891149200504",
     )
 
-    buscar = st.button("🔎 Buscar produto", type="primary", use_container_width=True)
+    buscar_manual = st.button("🔎 Buscar produto", type="primary", use_container_width=True)
 
-if buscar:
-    codigo_busca = codigo_manual.strip()
-    if not codigo_busca:
-        st.error("Digite ou fotografe um código de barra antes de buscar.")
+codigo_busca = codigo_auto or (codigo_manual.strip() if buscar_manual else None)
+
+if buscar_manual and not codigo_manual.strip():
+    st.error("Digite ou fotografe um código de barra antes de buscar.")
+elif codigo_busca:
+    st.session_state.codigo_barra_atual = codigo_busca
+    try:
+        with st.spinner("Consultando em todas as lojas..."):
+            info = buscar_produto_todas_lojas(codigo_busca)
+    except Exception as e:
+        st.error(f"Erro ao consultar o produto: {e}")
+        info = None
+
+    if info is not None:
+        st.divider()
+        st.markdown(f"### {info['Produto']}")
+        col1, col2, col3 = st.columns(3)
+        col1.metric("Código do Produto", info["Codigo"] if info["Codigo"] is not None else "-")
+        col2.metric("Cód. Barra", info["CodBarra"])
+        col3.metric("Estoque Total (todas as lojas)", f"{info['EstoqueTotal']:.0f}")
+
+        # Lojas em LINHA e Estoque/Preço em COLUNA — cabe na tela do celular sem
+        # rolar pros lados (o formato anterior, loja por coluna, ficava cortado
+        # no mobile com só 4 das 8 lojas visíveis).
+        linhas_tabela = [
+            {"Loja": loja, "📦 Estoque": info["EstoquePorLoja"][loja], "💰 Preço": preco_para_texto(info["PrecoPorLoja"][loja])}
+            for loja in LOJAS_NOMES
+        ]
+        linhas_tabela.append({"Loja": "Total", "📦 Estoque": info["EstoqueTotal"], "💰 Preço": ""})
+        tabela_combinada = pd.DataFrame(linhas_tabela).set_index("Loja")
+        st.dataframe(tabela_combinada, use_container_width=True)
+
+        base_hist = {
+            "Hora": data_hora_brasilia(),
+            "Usuário": st.session_state.usuario_logado,
+            "Produto": info["Produto"],
+            "Código": info["Codigo"],
+            "Cód. Barra": info["CodBarra"],
+        }
+        linha_hist = {
+            **base_hist,
+            "Estoque": {**info["EstoquePorLoja"], "Total": info["EstoqueTotal"]},
+            "Preco": {loja: preco_para_texto(v) for loja, v in info["PrecoPorLoja"].items()},
+        }
+        st.session_state.historico_scans.insert(0, linha_hist)
     else:
-        st.session_state.codigo_barra_atual = codigo_busca
-        try:
-            with st.spinner("Consultando em todas as lojas..."):
-                info = buscar_produto_todas_lojas(codigo_busca)
-        except Exception as e:
-            st.error(f"Erro ao consultar o produto: {e}")
-            info = None
-
-        if info is not None:
-            st.divider()
-            st.markdown(f"### {info['Produto']}")
-            col1, col2, col3 = st.columns(3)
-            col1.metric("Código do Produto", info["Codigo"] if info["Codigo"] is not None else "-")
-            col2.metric("Cód. Barra", info["CodBarra"])
-            col3.metric("Estoque Total (todas as lojas)", f"{info['EstoqueTotal']:.0f}")
-
-            # Lojas em LINHA e Estoque/Preço em COLUNA — cabe na tela do celular sem
-            # rolar pros lados (o formato anterior, loja por coluna, ficava cortado
-            # no mobile com só 4 das 8 lojas visíveis).
-            linhas_tabela = [
-                {"Loja": loja, "📦 Estoque": info["EstoquePorLoja"][loja], "💰 Preço": preco_para_texto(info["PrecoPorLoja"][loja])}
-                for loja in LOJAS_NOMES
-            ]
-            linhas_tabela.append({"Loja": "Total", "📦 Estoque": info["EstoqueTotal"], "💰 Preço": ""})
-            tabela_combinada = pd.DataFrame(linhas_tabela).set_index("Loja")
-            st.dataframe(tabela_combinada, use_container_width=True)
-
-            base_hist = {
-                "Hora": data_hora_brasilia(),
-                "Usuário": st.session_state.usuario_logado,
-                "Produto": info["Produto"],
-                "Código": info["Codigo"],
-                "Cód. Barra": info["CodBarra"],
-            }
-            linha_hist = {
-                **base_hist,
-                "Estoque": {**info["EstoquePorLoja"], "Total": info["EstoqueTotal"]},
-                "Preco": {loja: preco_para_texto(v) for loja, v in info["PrecoPorLoja"].items()},
-            }
-            st.session_state.historico_scans.insert(0, linha_hist)
-        else:
-            st.error(f"❌ Nenhum produto encontrado com o código **{codigo_busca}**.")
-            sugestoes = buscar_produtos_parecidos(codigo_busca)
-            if sugestoes is not None and not sugestoes.empty:
-                st.caption("Produtos com código de barra parecido:")
-                st.dataframe(sugestoes, use_container_width=True, hide_index=True)
+        st.error(f"❌ Nenhum produto encontrado com o código **{codigo_busca}**.")
+        sugestoes = buscar_produtos_parecidos(codigo_busca)
+        if sugestoes is not None and not sugestoes.empty:
+            st.caption("Produtos com código de barra parecido:")
+            st.dataframe(sugestoes, use_container_width=True, hide_index=True)
 
 if st.session_state.historico_scans:
     st.divider()
