@@ -5,6 +5,16 @@ import numpy as np
 import cv2
 from datetime import datetime, timezone, timedelta
 
+try:
+    # Câmera traseira por padrão (facingMode "environment") — evita ter que
+    # inverter manualmente toda hora. Se o pacote não estiver instalado
+    # (esqueceu de subir o requirements.txt novo), cai de volta no
+    # st.camera_input padrão do Streamlit (câmera frontal por padrão).
+    from streamlit_back_camera_input import back_camera_input
+    _TEM_CAMERA_TRASEIRA = True
+except Exception:
+    _TEM_CAMERA_TRASEIRA = False
+
 # ─────────────────────────────────────────────────────────────────────────────
 # 🔎 CONSULTA DE PRODUTO POR CÓDIGO DE BARRA (leitura via câmera)
 # Mesmo padrão do app de Pedidos: conexão "banco_erp" (st.connection), view
@@ -352,7 +362,13 @@ if "ultimo_codigo_auto" not in st.session_state:
 codigo_auto = None
 col_busca_esq, col_busca_meio, col_busca_dir = st.columns([1, 2, 1])
 with col_busca_meio:
-    foto = st.camera_input("📷 Fotografar o código de barras")
+    st.markdown("**📷 Fotografar o código de barras**")
+    if _TEM_CAMERA_TRASEIRA:
+        st.caption("Toque no vídeo pra capturar (já abre na câmera traseira).")
+        foto = back_camera_input(key="camera_barra")
+    else:
+        foto = st.camera_input("Fotografar o código de barras", label_visibility="collapsed")
+
     if foto is not None:
         codigos_encontrados = decodificar_codigo_barra(foto.getvalue())
         if codigos_encontrados:
