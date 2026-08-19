@@ -6,3 +6,4 @@ opencv-python-headless
 pyzbar
 numpy
 streamlit-back-camera-input
+reportlab
