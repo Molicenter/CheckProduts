@@ -21,7 +21,7 @@ st.set_page_config(
     initial_sidebar_state="collapsed",  # começa fechada — usuário abre pelo ">" se precisar
 )
 
-LOJAS_NOMES = ["Loja 01", "Loja 02", "Loja 03", "Loja 04", "Loja 05", "Loja 06", "Loja 07", "Loja 08"]
+LOJAS_NOMES = ["Loja 01", "Loja 02", "Loja 03", "Loja 04", "Loja 05", "Loja 06", "Loja 07", "Loja 08", "Loja 30"]
 LOJAS_CODIGOS = [f"{i:03d}" for i in range(1, len(LOJAS_NOMES) + 1)]
 
 # Senha fixa de acesso — gate simples (não é autenticação forte), conforme pedido.
