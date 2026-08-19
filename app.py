@@ -81,7 +81,17 @@ st.markdown(f"""
         color: white !important;
         border-color: {COR_BOTAO_SIDEBAR} !important;
     }}
-    /* Lista suspensa dos selectbox (ex.: "Loja desta ronda") abre com fundo
+    /* Selectbox na sidebar (ex.: "Loja desta ronda"): a caixinha em si tem
+       fundo claro (não navy), então força fundo branco + texto escuro nela —
+       tanto fechada (valor escolhido) quanto aberta (campo de busca/filtro). */
+    [data-testid="stSidebar"] [data-baseweb="select"] > div {{
+        background-color: #ffffff !important;
+        border-color: #cccccc !important;
+    }}
+    [data-testid="stSidebar"] [data-baseweb="select"] * {{
+        color: #1A1A1A !important;
+    }}
+    /* Lista suspensa (as opções "Loja 01", "Loja 02"...) abre com fundo
        branco, mas herdava o texto branco da sidebar e ficava ilegível — força
        preto só dentro da lista de opções, sem mexer no resto. */
     [data-baseweb="popover"] * ,
