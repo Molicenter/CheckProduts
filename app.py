@@ -81,6 +81,14 @@ st.markdown(f"""
         color: white !important;
         border-color: {COR_BOTAO_SIDEBAR} !important;
     }}
+    /* Lista suspensa dos selectbox (ex.: "Loja desta ronda") abre com fundo
+       branco, mas herdava o texto branco da sidebar e ficava ilegível — força
+       preto só dentro da lista de opções, sem mexer no resto. */
+    [data-baseweb="popover"] * ,
+    [data-baseweb="menu"] * ,
+    ul[role="listbox"] * {{
+        color: #1A1A1A !important;
+    }}
     </style>
 """, unsafe_allow_html=True)
 
@@ -546,14 +554,22 @@ if not st.session_state.autenticado:
                     unsafe_allow_html=True,
                 )
                 usuario = st.text_input(
-                    "Usuário de acesso", label_visibility="collapsed", placeholder="Digite seu nome"
+                    "Usuário de acesso", label_visibility="collapsed", placeholder="Digite seu nome",
+                    autocomplete="username",
                 )
 
                 st.markdown(
                     f"<span style='color:{COR_LABEL_SENHA};font-weight:600;'>🔑 Senha de acesso:</span>",
                     unsafe_allow_html=True,
                 )
-                senha = st.text_input("Senha de acesso", type="password", label_visibility="collapsed")
+                # autocomplete="current-password" avisa o navegador que é login
+                # (não cadastro) — sem isso, o Chrome sugere "criar senha forte"
+                # a cada acesso, porque o padrão do Streamlit pra campo de senha
+                # é "new-password".
+                senha = st.text_input(
+                    "Senha de acesso", type="password", label_visibility="collapsed",
+                    autocomplete="current-password",
+                )
 
                 st.write("")
                 entrar = st.form_submit_button(
