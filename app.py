@@ -1,9 +1,19 @@
 import base64
+import json
 import streamlit as st
+import streamlit.components.v1 as components
 import pandas as pd
 import numpy as np
 import cv2
+from io import BytesIO
 from datetime import datetime, timezone, timedelta
+
+from reportlab.lib.pagesizes import A4
+from reportlab.lib.units import cm
+from reportlab.lib import colors
+from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
+from reportlab.lib.styles import getSampleStyleSheet
+from sqlalchemy import text
 
 try:
     # Câmera traseira por padrão (facingMode "environment") — evita ter que
@@ -139,6 +149,82 @@ conn_pg = st.connection(
 )
 
 # ─────────────────────────────────────────────────────────────────────────────
+# 💾 RONDA DE PREÇOS — gravado direto no Postgres (não em session_state), pra
+# não perder nada se a internet oscilar/recarregar a página no meio da ronda,
+# e pra várias lojas registrarem ao mesmo tempo no mesmo lugar.
+# ─────────────────────────────────────────────────────────────────────────────
+TABELA_RONDA = "ronda_precos_erros"
+
+
+@st.cache_resource(show_spinner=False)
+def _garantir_tabela_ronda() -> bool:
+    try:
+        with conn_pg.session as s:
+            s.execute(text(f"""
+                CREATE TABLE IF NOT EXISTS {TABELA_RONDA} (
+                    id SERIAL PRIMARY KEY,
+                    criado_em TIMESTAMP NOT NULL DEFAULT NOW(),
+                    hora_texto VARCHAR(20),
+                    usuario VARCHAR(100),
+                    loja VARCHAR(50),
+                    produto VARCHAR(255),
+                    codigo VARCHAR(50),
+                    codigo_barra VARCHAR(50),
+                    preco_sistema VARCHAR(30),
+                    observacao TEXT,
+                    resolvido BOOLEAN NOT NULL DEFAULT FALSE
+                )
+            """))
+            s.commit()
+        return True
+    except Exception:
+        return False
+
+
+def salvar_erro_ronda(loja, usuario, produto, codigo, codigo_barra, preco_sistema_txt, observacao):
+    with conn_pg.session as s:
+        s.execute(text(f"""
+            INSERT INTO {TABELA_RONDA}
+                (hora_texto, usuario, loja, produto, codigo, codigo_barra, preco_sistema, observacao)
+            VALUES
+                (:hora_texto, :usuario, :loja, :produto, :codigo, :codigo_barra, :preco_sistema, :observacao)
+        """), {
+            "hora_texto": data_hora_brasilia(),
+            "usuario": usuario,
+            "loja": loja,
+            "produto": produto,
+            "codigo": str(codigo) if codigo is not None else None,
+            "codigo_barra": codigo_barra,
+            "preco_sistema": preco_sistema_txt,
+            "observacao": observacao or "",
+        })
+        s.commit()
+
+
+@st.cache_data(ttl=10)
+def buscar_erros_ronda(loja: str) -> pd.DataFrame:
+    try:
+        return conn_pg.query(
+            f"SELECT id, hora_texto, usuario, loja, produto, codigo, codigo_barra, "
+            f"preco_sistema, observacao FROM {TABELA_RONDA} "
+            f"WHERE loja = :loja AND resolvido = FALSE ORDER BY criado_em DESC",
+            params={"loja": loja},
+            ttl=10,
+        )
+    except Exception:
+        return pd.DataFrame()
+
+
+def marcar_erros_resolvidos(loja: str):
+    with conn_pg.session as s:
+        s.execute(
+            text(f"UPDATE {TABELA_RONDA} SET resolvido = TRUE WHERE loja = :loja AND resolvido = FALSE"),
+            {"loja": loja},
+        )
+        s.commit()
+    buscar_erros_ronda.clear()
+
+# ─────────────────────────────────────────────────────────────────────────────
 # 📷 LEITURA DO CÓDIGO DE BARRA NA FOTO (pyzbar, com fallback no OpenCV)
 # ─────────────────────────────────────────────────────────────────────────────
 try:
@@ -188,6 +274,162 @@ def preco_para_texto(v) -> str:
         return f"R$ {float(v):.2f}".replace(".", ",")
     except (ValueError, TypeError):
         return "-"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 🖨️ IMPRESSÃO NA ZEBRA ZQ630 PLUS (via app "Zebra Browser Print" no Android)
+#
+# COMO FUNCIONA: o app roda na nuvem, então quem manda o comando pra impressora
+# é o NAVEGADOR do celular — não o Python. O app Android "Zebra Browser Print"
+# roda em segundo plano, conectado à impressora por Bluetooth, e expõe uma API
+# local que o JavaScript da página consegue chamar (padrão oficial da Zebra
+# pra isso, não funciona em iPhone).
+#
+# CONFIGURAÇÃO NECESSÁRIA (uma vez só, por celular):
+#   1. Instalar o app "Zebra Browser Print" no Android (baixar em zebra.com,
+#      seção de suporte/downloads do ZQ630 Plus).
+#   2. Parear a impressora ZQ630 Plus por Bluetooth no próprio Android
+#      (Configurações > Bluetooth) e depois abrir o app Zebra Browser Print
+#      pra ele descobrir/registrar a impressora e marcar como "padrão".
+#   3. Baixar o arquivo BrowserPrint-3.x.x.min.js (SDK oficial, mesmo site de
+#      suporte da Zebra) e salvar como "browserprint.js" na raiz deste
+#      repositório, junto do app.py — o app lê e injeta esse arquivo sozinho.
+#   4. Na primeira vez que a tela de impressão for aberta no celular, o app
+#      Zebra Browser Print vai pedir permissão pra esse site — precisa aceitar.
+# ─────────────────────────────────────────────────────────────────────────────
+def _browserprint_js() -> str:
+    try:
+        with open("browserprint.js", "r", encoding="utf-8") as f:
+            return f.read()
+    except Exception:
+        return ""
+
+
+def gerar_zpl_etiqueta(info: dict) -> str:
+    """Monta o ZPL de uma etiqueta de preço simples: produto, código de barras
+    e preço. Ajuste as posições/tamanhos (^FO, ^A0) se a etiqueta sair cortada
+    ou desalinhada na sua impressora/rolo de etiqueta específico.
+    info precisa ter: Produto, CodBarra, PrecoTxt (preço já formatado como texto,
+    já que o preço varia por loja — veja PrecoPorLoja)."""
+    produto = str(info.get("Produto", "") or "")[:40].replace("^", "").replace("~", "")
+    codigo_barra = str(info.get("CodBarra", "") or "").strip()
+    preco_txt = str(info.get("PrecoTxt", "") or "-")
+    return (
+        "^XA\n"
+        "^PW600\n"
+        "^CF0,28\n"
+        f"^FO20,20^FB560,2,0,L^FD{produto}^FS\n"
+        "^BY2,2,80\n"
+        f"^FO20,90^BCN,80,Y,N,N^FD{codigo_barra}^FS\n"
+        "^CF0,55\n"
+        f"^FO20,190^FD{preco_txt}^FS\n"
+        "^XZ\n"
+    )
+
+
+def botao_imprimir_zebra(info: dict):
+    js_sdk = _browserprint_js()
+    if not js_sdk:
+        st.caption(
+            "🖨️ Impressão Zebra indisponível: falta o arquivo `browserprint.js` "
+            "(SDK oficial da Zebra) na raiz do repositório — ver LEIA-ME."
+        )
+        return
+
+    zpl = gerar_zpl_etiqueta(info)
+    zpl_js = json.dumps(zpl)  # string já escapada e segura pra colar dentro do JS
+
+    html = f"""
+    <script>{js_sdk}</script>
+    <button id="btnImprimirZebra" style="
+        width:100%; padding:10px; border-radius:8px; border:none;
+        background-color:{COR_PRIMARIA}; color:white; font-weight:600;
+        font-size:15px; cursor:pointer;">
+        🖨️ Imprimir Etiqueta (Zebra)
+    </button>
+    <div id="statusImpressaoZebra" style="margin-top:8px; font-family:sans-serif; font-size:13px;"></div>
+    <script>
+    (function() {{
+        var status = document.getElementById('statusImpressaoZebra');
+        document.getElementById('btnImprimirZebra').addEventListener('click', function() {{
+            status.innerText = '🔎 Procurando impressora...';
+            try {{
+                BrowserPrint.getDefaultDevice('printer', function(printer) {{
+                    if (!printer) {{
+                        status.innerText = '❌ Nenhuma impressora encontrada. Abra o app Zebra Browser Print e confira se a ZQ630 Plus está pareada e definida como padrão.';
+                        return;
+                    }}
+                    status.innerText = '📤 Enviando pra ' + printer.name + '...';
+                    printer.send({zpl_js}, function() {{
+                        status.innerText = '✅ Etiqueta enviada pra impressora!';
+                    }}, function(err) {{
+                        status.innerText = '❌ Erro ao enviar: ' + err;
+                    }});
+                }}, function(err) {{
+                    status.innerText = '❌ Erro ao localizar impressora (o app Zebra Browser Print está aberto/instalado?): ' + err;
+                }});
+            }} catch (e) {{
+                status.innerText = '❌ Erro: ' + e;
+            }}
+        }});
+    }})();
+    </script>
+    """
+    components.html(html, height=110)
+
+
+def gerar_pdf_ronda(df_erros: pd.DataFrame, loja_ronda: str) -> bytes:
+    """Gera um PDF-checklist (não etiquetas prontas) com os produtos marcados
+    como 'preço errado na gôndola' durante a ronda, pra quem está na frente
+    da máquina revisar e reimprimir as etiquetas certas. df_erros vem direto
+    da tabela no Postgres (buscar_erros_ronda)."""
+    buffer = BytesIO()
+    doc = SimpleDocTemplate(
+        buffer, pagesize=A4,
+        topMargin=1.5 * cm, bottomMargin=1.5 * cm,
+        leftMargin=1.5 * cm, rightMargin=1.5 * cm,
+    )
+    estilos = getSampleStyleSheet()
+    historia = []
+
+    historia.append(Paragraph("Ronda de Preços — Produtos com Erro", estilos["Title"]))
+    historia.append(Paragraph(f"Loja: {loja_ronda}", estilos["Heading2"]))
+    historia.append(Paragraph(f"Gerado em: {data_hora_brasilia()}", estilos["Normal"]))
+    historia.append(Spacer(1, 0.6 * cm))
+
+    cabecalho = ["Hora", "Produto", "Código", "Cód. Barra", "Preço no sistema", "Observação"]
+    linhas = [cabecalho]
+    for _, e in df_erros.iterrows():
+        linhas.append([
+            Paragraph(str(e.get("hora_texto", "-") or "-"), estilos["Normal"]),
+            Paragraph(str(e.get("produto", "-") or "-"), estilos["Normal"]),
+            Paragraph(str(e.get("codigo", "-") or "-"), estilos["Normal"]),
+            Paragraph(str(e.get("codigo_barra", "-") or "-"), estilos["Normal"]),
+            Paragraph(str(e.get("preco_sistema", "-") or "-"), estilos["Normal"]),
+            Paragraph(str(e.get("observacao", "") or "-"), estilos["Normal"]),
+        ])
+
+    tabela = Table(
+        linhas,
+        colWidths=[2.0 * cm, 5.5 * cm, 2.0 * cm, 3.0 * cm, 3.0 * cm, 4.0 * cm],
+        repeatRows=1,
+    )
+    tabela.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#D6218C")),
+        ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+        ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+        ("FONTSIZE", (0, 0), (-1, -1), 9),
+        ("GRID", (0, 0), (-1, -1), 0.5, colors.grey),
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#F0F2F6")]),
+    ]))
+    historia.append(tabela)
+    historia.append(Spacer(1, 0.6 * cm))
+    historia.append(Paragraph(f"Total de itens: {len(df_erros)}", estilos["Normal"]))
+
+    doc.build(historia)
+    buffer.seek(0)
+    return buffer.getvalue()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -262,6 +504,11 @@ if "usuario_logado" not in st.session_state:
     st.session_state.usuario_logado = ""
 if "historico_scans" not in st.session_state:
     st.session_state.historico_scans = []
+if "loja_ronda" not in st.session_state:
+    st.session_state.loja_ronda = LOJAS_NOMES[0]
+
+if erp_ativo():
+    _garantir_tabela_ronda()
 
 if not st.session_state.autenticado:
     st.write("")  # respiro no topo, igual ao Portal de Pedidos
@@ -339,6 +586,31 @@ with st.sidebar:
         if st.button("🧹 Limpar histórico", use_container_width=True):
             st.session_state.historico_scans = []
             st.rerun()
+
+    st.divider()
+    st.markdown("**🚩 Ronda de preços**")
+    st.session_state.loja_ronda = st.selectbox(
+        "Loja desta ronda:", LOJAS_NOMES,
+        index=LOJAS_NOMES.index(st.session_state.loja_ronda),
+        key="select_loja_ronda",
+    )
+    # Vem direto do banco (não de session_state) — não some se a página recarregar.
+    df_erros_loja = buscar_erros_ronda(st.session_state.loja_ronda) if erp_ativo() else pd.DataFrame()
+    if df_erros_loja is not None and not df_erros_loja.empty:
+        st.caption(f"🚩 {len(df_erros_loja)} produto(s) marcado(s) com erro de preço nesta loja")
+        pdf_bytes = gerar_pdf_ronda(df_erros_loja, st.session_state.loja_ronda)
+        st.download_button(
+            "📄 Gerar PDF da ronda",
+            data=pdf_bytes,
+            file_name=f"ronda_precos_{st.session_state.loja_ronda.replace(' ', '_')}.pdf",
+            mime="application/pdf",
+            use_container_width=True,
+        )
+        if st.button("✅ Marcar como resolvidos (já impressos)", use_container_width=True):
+            marcar_erros_resolvidos(st.session_state.loja_ronda)
+            st.rerun()
+    else:
+        st.caption("Nenhum produto marcado com erro de preço nesta loja.")
 
 desenhar_banner(subtitulo=f"Usuário: {st.session_state.usuario_logado}")
 st.caption("Fotografe o código de barras do produto para ver o estoque em todas as lojas e o preço na hora.")
@@ -428,6 +700,48 @@ def mostrar_resultado(codigo_busca: str, registrar_historico: bool):
         linhas_tabela.append({"Loja": "Total", "📦 Estoque": info["EstoqueTotal"], "💰 Preço": ""})
         tabela_combinada = pd.DataFrame(linhas_tabela).set_index("Loja")
         st.dataframe(tabela_combinada, use_container_width=True)
+
+        # Preço varia por loja — escolhe de qual loja sai o preço impresso na etiqueta.
+        st.markdown("**🖨️ Imprimir etiqueta de preço (Zebra ZQ630 Plus)**")
+        loja_etiqueta = st.selectbox(
+            "Preço da loja para a etiqueta:", LOJAS_NOMES, key="loja_etiqueta_impressao"
+        )
+        botao_imprimir_zebra({
+            "Produto": info["Produto"],
+            "CodBarra": info["CodBarra"],
+            "PrecoTxt": preco_para_texto(info["PrecoPorLoja"][loja_etiqueta]),
+        })
+
+        # ── Ronda: marcar preço errado na gôndola ─────────────────────────
+        st.markdown("**🚩 Preço errado na gôndola?**")
+        st.caption(
+            f"Loja da ronda: **{st.session_state.loja_ronda}** "
+            "(troque no menu lateral se precisar)"
+        )
+        with st.form(key=f"form_erro_ronda_{codigo_busca}", clear_on_submit=True):
+            observacao = st.text_area(
+                "Observação (opcional):", placeholder="Ex: etiqueta mostra R$ 5,99, sistema tem R$ 7,49",
+                height=70,
+            )
+            marcar_erro = st.form_submit_button(
+                "🚩 Registrar erro nesta loja", use_container_width=True
+            )
+        if marcar_erro:
+            preco_sistema = info["PrecoPorLoja"].get(st.session_state.loja_ronda)
+            try:
+                salvar_erro_ronda(
+                    loja=st.session_state.loja_ronda,
+                    usuario=st.session_state.usuario_logado,
+                    produto=info["Produto"],
+                    codigo=info["Codigo"],
+                    codigo_barra=info["CodBarra"],
+                    preco_sistema_txt=preco_para_texto(preco_sistema),
+                    observacao=observacao.strip(),
+                )
+                buscar_erros_ronda.clear()
+                st.success("🚩 Marcado e salvo no banco! Vai aparecer no PDF da ronda (menu lateral).")
+            except Exception as e:
+                st.error(f"❌ Não deu pra salvar no banco agora: {e}")
 
         if registrar_historico:
             base_hist = {
