@@ -83,21 +83,28 @@ st.markdown(f"""
     }}
     /* Selectbox na sidebar (ex.: "Loja desta ronda"): a caixinha em si tem
        fundo claro (não navy), então força fundo branco + texto escuro nela —
-       tanto fechada (valor escolhido) quanto aberta (campo de busca/filtro). */
-    [data-testid="stSidebar"] [data-baseweb="select"] > div {{
+       tanto fechada (valor escolhido) quanto aberta (campo de busca/filtro).
+       -webkit-text-fill-color é necessário além de color: em campos <input>,
+       o Chrome pode ignorar só o "color" e continuar pintando a letra em
+       branco (é o que estava acontecendo aqui). */
+    [data-testid="stSidebar"] [data-baseweb="select"] > div,
+    [data-testid="stSidebar"] input {{
         background-color: #ffffff !important;
         border-color: #cccccc !important;
     }}
-    [data-testid="stSidebar"] [data-baseweb="select"] * {{
+    [data-testid="stSidebar"] [data-baseweb="select"] *,
+    [data-testid="stSidebar"] input {{
         color: #1A1A1A !important;
+        -webkit-text-fill-color: #1A1A1A !important;
     }}
     /* Lista suspensa (as opções "Loja 01", "Loja 02"...) abre com fundo
        branco, mas herdava o texto branco da sidebar e ficava ilegível — força
        preto só dentro da lista de opções, sem mexer no resto. */
-    [data-baseweb="popover"] * ,
-    [data-baseweb="menu"] * ,
+    [data-baseweb="popover"] *,
+    [data-baseweb="menu"] *,
     ul[role="listbox"] * {{
         color: #1A1A1A !important;
+        -webkit-text-fill-color: #1A1A1A !important;
     }}
     </style>
 """, unsafe_allow_html=True)
