@@ -526,13 +526,37 @@ def buscar_validades(loja: str) -> pd.DataFrame:
         return pd.DataFrame()
 
 
-def marcar_validades_baixadas(ids: list):
+def salvar_alteracoes_validade(df_editado: pd.DataFrame):
+    """Grava de volta no banco o que foi editado na tabela (data, quantidade,
+    observação, baixado) — chamada só com as linhas que NÃO vão ser excluídas."""
+    with conn_pg.session as s:
+        for _, linha in df_editado.iterrows():
+            s.execute(text(f"""
+                UPDATE {TABELA_VALIDADE}
+                SET data_validade = :data_validade,
+                    quantidade = :quantidade,
+                    observacao = :observacao,
+                    baixado = :baixado
+                WHERE id = :id
+            """), {
+                "data_validade": linha["data_validade"],
+                "quantidade": linha["quantidade"],
+                "observacao": linha.get("observacao") or "",
+                "baixado": bool(linha.get("Baixado (retirado)")),
+                "id": int(linha["id"]),
+            })
+        s.commit()
+    buscar_validades.clear()
+
+
+def excluir_validades(ids: list):
+    """Apaga de vez (não é só 'baixado') — pra corrigir cadastro feito por engano."""
     if not ids:
         return
     with conn_pg.session as s:
         for item_id in ids:
             s.execute(
-                text(f"UPDATE {TABELA_VALIDADE} SET baixado = TRUE WHERE id = :id"),
+                text(f"DELETE FROM {TABELA_VALIDADE} WHERE id = :id"),
                 {"id": int(item_id)},
             )
         s.commit()
@@ -587,13 +611,16 @@ def renderizar_modulo_validade():
         else:
             st.success(f"**{info['Produto']}** — Código {info['Codigo']}")
             with st.form(key=f"form_validade_{codigo_busca}", clear_on_submit=True):
-                data_validade = st.date_input("Data de validade:")
+                data_validade = st.date_input("Data de validade:", format="DD/MM/YYYY")
                 quantidade = st.number_input(
-                    "Quantidade (unidades/caixas):", min_value=0.0, step=1.0, value=1.0
+                    "Quantidade (unidades/caixas):", min_value=0.0, step=1.0, value=None,
+                    placeholder="Ex: 3",
                 )
                 observacao_validade = st.text_area("Observação (opcional):", height=68)
                 registrar = st.form_submit_button("📅 Registrar validade", use_container_width=True)
-            if registrar:
+            if registrar and quantidade is None:
+                st.error("Preencha a quantidade antes de registrar.")
+            elif registrar:
                 try:
                     salvar_validade(
                         loja=st.session_state.loja_ronda,
@@ -634,29 +661,48 @@ def renderizar_modulo_validade():
         st.warning(f"⚠️ {n_alerta} produto(s) vencendo em até {dias_alerta} dia(s) nesta loja.")
 
     df_val["Baixado (retirado)"] = False
+    df_val["Excluir"] = False
+    st.caption(
+        "Pode editar a data, a quantidade e a observação direto na tabela — "
+        "marque **Baixado** quando já resolver (troca de etiqueta, promoção, devolução) "
+        "ou **Excluir** se cadastrou por engano. Depois clica em **Salvar alterações**."
+    )
     df_editado = st.data_editor(
         df_val[[
             "id", "⚠️", "produto", "codigo_barra", "data_validade", "dias_restantes",
-            "quantidade", "observacao", "Baixado (retirado)",
+            "quantidade", "observacao", "Baixado (retirado)", "Excluir",
         ]],
         use_container_width=True,
         hide_index=True,
         column_order=[
             "⚠️", "produto", "codigo_barra", "data_validade", "dias_restantes",
-            "quantidade", "observacao", "Baixado (retirado)",
+            "quantidade", "observacao", "Baixado (retirado)", "Excluir",
         ],
-        disabled=[
-            "⚠️", "produto", "codigo_barra", "data_validade", "dias_restantes",
-            "quantidade", "observacao",
-        ],
+        column_config={
+            "⚠️": st.column_config.TextColumn(" ", disabled=True),
+            "produto": st.column_config.TextColumn("Produto", disabled=True),
+            "codigo_barra": st.column_config.TextColumn("Cód. Barra", disabled=True),
+            "data_validade": st.column_config.DateColumn("Data de validade", format="DD/MM/YYYY"),
+            "dias_restantes": st.column_config.NumberColumn("Dias restantes", disabled=True),
+            "quantidade": st.column_config.NumberColumn("Quantidade", min_value=0.0, step=1.0),
+            "observacao": st.column_config.TextColumn("Observação"),
+            "Baixado (retirado)": st.column_config.CheckboxColumn("Baixado (retirado)"),
+            "Excluir": st.column_config.CheckboxColumn("🗑️ Excluir"),
+        },
         key="editor_validade",
     )
-    ids_baixar = df_editado.loc[df_editado["Baixado (retirado)"], "id"].tolist()
-    if ids_baixar and st.button(
-        f"✅ Dar baixa em {len(ids_baixar)} produto(s) marcado(s)", use_container_width=True
-    ):
-        marcar_validades_baixadas(ids_baixar)
-        st.rerun()
+    if st.button("💾 Salvar alterações", type="primary", use_container_width=True):
+        ids_excluir = df_editado.loc[df_editado["Excluir"], "id"].tolist()
+        df_atualizar = df_editado.loc[~df_editado["id"].isin(ids_excluir)]
+        try:
+            if not df_atualizar.empty:
+                salvar_alteracoes_validade(df_atualizar)
+            if ids_excluir:
+                excluir_validades(ids_excluir)
+            st.success("Alterações salvas!")
+            st.rerun()
+        except Exception as e:
+            st.error(f"❌ Não deu pra salvar as alterações agora: {e}")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
