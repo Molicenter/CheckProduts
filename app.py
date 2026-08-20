@@ -485,6 +485,14 @@ def _garantir_tabela_validade() -> bool:
                     baixado BOOLEAN NOT NULL DEFAULT FALSE
                 )
             """))
+            # Coluna nova: quantidade "cadastrada" (na foto original) fica fixa,
+            # e essa aqui é a que o encarregado vai atualizando com a quantidade
+            # real, dias depois. ADD COLUMN IF NOT EXISTS não quebra quem já
+            # tinha essa tabela criada antes dessa coluna existir.
+            s.execute(text(f"""
+                ALTER TABLE {TABELA_VALIDADE}
+                ADD COLUMN IF NOT EXISTS quantidade_atual NUMERIC(10, 2)
+            """))
             s.commit()
         return True
     except Exception:
@@ -495,9 +503,11 @@ def salvar_validade(loja, usuario, produto, codigo, codigo_barra, data_validade,
     with conn_pg.session as s:
         s.execute(text(f"""
             INSERT INTO {TABELA_VALIDADE}
-                (hora_texto, usuario, loja, produto, codigo, codigo_barra, data_validade, quantidade, observacao)
+                (hora_texto, usuario, loja, produto, codigo, codigo_barra, data_validade,
+                 quantidade, quantidade_atual, observacao)
             VALUES
-                (:hora_texto, :usuario, :loja, :produto, :codigo, :codigo_barra, :data_validade, :quantidade, :observacao)
+                (:hora_texto, :usuario, :loja, :produto, :codigo, :codigo_barra, :data_validade,
+                 :quantidade, :quantidade, :observacao)
         """), {
             "hora_texto": data_hora_brasilia(),
             "usuario": usuario,
@@ -517,7 +527,7 @@ def buscar_validades(loja: str) -> pd.DataFrame:
     try:
         return conn_pg.query(
             f"SELECT id, hora_texto, produto, codigo, codigo_barra, data_validade, "
-            f"quantidade, observacao FROM {TABELA_VALIDADE} "
+            f"quantidade, quantidade_atual, observacao FROM {TABELA_VALIDADE} "
             f"WHERE loja = :loja AND baixado = FALSE ORDER BY data_validade ASC",
             params={"loja": loja},
             ttl=10,
@@ -527,22 +537,21 @@ def buscar_validades(loja: str) -> pd.DataFrame:
 
 
 def salvar_alteracoes_validade(df_editado: pd.DataFrame):
-    """Grava de volta no banco o que foi editado na tabela (data, quantidade,
-    observação, baixado) — chamada só com as linhas que NÃO vão ser excluídas."""
+    """Grava de volta no banco o que foi editado na tabela (data, observação e
+    a quantidade ATUAL — a quantidade cadastrada originalmente não muda aqui)
+    — chamada só com as linhas que NÃO vão ser excluídas."""
     with conn_pg.session as s:
         for _, linha in df_editado.iterrows():
             s.execute(text(f"""
                 UPDATE {TABELA_VALIDADE}
                 SET data_validade = :data_validade,
-                    quantidade = :quantidade,
-                    observacao = :observacao,
-                    baixado = :baixado
+                    quantidade_atual = :quantidade_atual,
+                    observacao = :observacao
                 WHERE id = :id
             """), {
                 "data_validade": linha["data_validade"],
-                "quantidade": linha["quantidade"],
+                "quantidade_atual": linha["quantidade_atual"],
                 "observacao": linha.get("observacao") or "",
-                "baixado": bool(linha.get("Baixado (retirado)")),
                 "id": int(linha["id"]),
             })
         s.commit()
@@ -660,23 +669,26 @@ def renderizar_modulo_validade():
     if n_alerta:
         st.warning(f"⚠️ {n_alerta} produto(s) vencendo em até {dias_alerta} dia(s) nesta loja.")
 
-    df_val["Baixado (retirado)"] = False
+    # Quantidade cadastrada fica fixa (referência de quando foi lançada); a
+    # "atual" é a que o encarregado vai atualizando com a contagem real, dias
+    # depois. Registros antigos (antes dessa coluna existir) começam iguais.
+    df_val["quantidade_atual"] = df_val["quantidade_atual"].fillna(df_val["quantidade"])
     df_val["Excluir"] = False
     st.caption(
-        "Pode editar a data, a quantidade e a observação direto na tabela — "
-        "marque **Baixado** quando já resolver (troca de etiqueta, promoção, devolução) "
-        "ou **Excluir** se cadastrou por engano. Depois clica em **Salvar alterações**."
+        "Pode editar a data, a **Qtd. atual** e a observação direto na tabela — a "
+        "**Qtd. cadastrada** fica travada como referência de quando foi lançado. "
+        "Marque **Excluir** se cadastrou por engano. Depois clica em **Salvar alterações**."
     )
     df_editado = st.data_editor(
         df_val[[
             "id", "⚠️", "produto", "codigo_barra", "data_validade", "dias_restantes",
-            "quantidade", "observacao", "Baixado (retirado)", "Excluir",
+            "quantidade", "quantidade_atual", "observacao", "Excluir",
         ]],
         use_container_width=True,
         hide_index=True,
         column_order=[
             "⚠️", "produto", "codigo_barra", "data_validade", "dias_restantes",
-            "quantidade", "observacao", "Baixado (retirado)", "Excluir",
+            "quantidade", "quantidade_atual", "observacao", "Excluir",
         ],
         column_config={
             "⚠️": st.column_config.TextColumn(" ", disabled=True),
@@ -684,9 +696,9 @@ def renderizar_modulo_validade():
             "codigo_barra": st.column_config.TextColumn("Cód. Barra", disabled=True),
             "data_validade": st.column_config.DateColumn("Data de validade", format="DD/MM/YYYY"),
             "dias_restantes": st.column_config.NumberColumn("Dias restantes", disabled=True),
-            "quantidade": st.column_config.NumberColumn("Quantidade", min_value=0.0, step=1.0),
+            "quantidade": st.column_config.NumberColumn("Qtd. cadastrada", disabled=True),
+            "quantidade_atual": st.column_config.NumberColumn("Qtd. atual", min_value=0.0, step=1.0),
             "observacao": st.column_config.TextColumn("Observação"),
-            "Baixado (retirado)": st.column_config.CheckboxColumn("Baixado (retirado)"),
             "Excluir": st.column_config.CheckboxColumn("🗑️ Excluir"),
         },
         key="editor_validade",
