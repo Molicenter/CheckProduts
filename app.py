@@ -459,6 +459,207 @@ def gerar_pdf_ronda(df_erros: pd.DataFrame, loja_ronda: str) -> bytes:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# 📅 CONTROLE DE VALIDADE — cadastro de validade por produto/loja (mesma ideia
+# da Ronda de Preços: grava direto no Postgres, não em session_state).
+# ─────────────────────────────────────────────────────────────────────────────
+TABELA_VALIDADE = "controle_validade"
+
+
+@st.cache_resource(show_spinner=False)
+def _garantir_tabela_validade() -> bool:
+    try:
+        with conn_pg.session as s:
+            s.execute(text(f"""
+                CREATE TABLE IF NOT EXISTS {TABELA_VALIDADE} (
+                    id SERIAL PRIMARY KEY,
+                    criado_em TIMESTAMP NOT NULL DEFAULT NOW(),
+                    hora_texto VARCHAR(20),
+                    usuario VARCHAR(100),
+                    loja VARCHAR(50),
+                    produto VARCHAR(255),
+                    codigo VARCHAR(50),
+                    codigo_barra VARCHAR(50),
+                    data_validade DATE NOT NULL,
+                    quantidade NUMERIC(10, 2),
+                    observacao TEXT,
+                    baixado BOOLEAN NOT NULL DEFAULT FALSE
+                )
+            """))
+            s.commit()
+        return True
+    except Exception:
+        return False
+
+
+def salvar_validade(loja, usuario, produto, codigo, codigo_barra, data_validade, quantidade, observacao):
+    with conn_pg.session as s:
+        s.execute(text(f"""
+            INSERT INTO {TABELA_VALIDADE}
+                (hora_texto, usuario, loja, produto, codigo, codigo_barra, data_validade, quantidade, observacao)
+            VALUES
+                (:hora_texto, :usuario, :loja, :produto, :codigo, :codigo_barra, :data_validade, :quantidade, :observacao)
+        """), {
+            "hora_texto": data_hora_brasilia(),
+            "usuario": usuario,
+            "loja": loja,
+            "produto": produto,
+            "codigo": str(codigo) if codigo is not None else None,
+            "codigo_barra": codigo_barra,
+            "data_validade": data_validade,
+            "quantidade": quantidade,
+            "observacao": observacao or "",
+        })
+        s.commit()
+
+
+@st.cache_data(ttl=10)
+def buscar_validades(loja: str) -> pd.DataFrame:
+    try:
+        return conn_pg.query(
+            f"SELECT id, hora_texto, produto, codigo, codigo_barra, data_validade, "
+            f"quantidade, observacao FROM {TABELA_VALIDADE} "
+            f"WHERE loja = :loja AND baixado = FALSE ORDER BY data_validade ASC",
+            params={"loja": loja},
+            ttl=10,
+        )
+    except Exception:
+        return pd.DataFrame()
+
+
+def marcar_validades_baixadas(ids: list):
+    if not ids:
+        return
+    with conn_pg.session as s:
+        for item_id in ids:
+            s.execute(
+                text(f"UPDATE {TABELA_VALIDADE} SET baixado = TRUE WHERE id = :id"),
+                {"id": int(item_id)},
+            )
+        s.commit()
+    buscar_validades.clear()
+
+
+def renderizar_modulo_validade():
+    st.markdown("### 📅 Controle de Validade")
+    st.caption(
+        f"Loja: **{st.session_state.loja_ronda}** (troque no menu lateral). "
+        "Fotografe o código de barra do produto e registre a validade do lote encontrado na loja."
+    )
+
+    col_esq, col_meio, col_dir = st.columns([1, 2, 1])
+    with col_meio:
+        st.markdown("**📷 Fotografar o código de barra**")
+        if _TEM_CAMERA_TRASEIRA:
+            foto_validade = back_camera_input(key="camera_validade")
+        else:
+            foto_validade = st.camera_input(
+                "Fotografar código de barra", label_visibility="collapsed", key="camera_validade"
+            )
+
+        st.markdown("**Ou digite o código manualmente**")
+        codigo_manual_validade = st.text_input(
+            "Código manual", label_visibility="collapsed", key="codigo_manual_validade",
+            placeholder="Ex: 7891149200504",
+        )
+
+    codigo_lido = None
+    if foto_validade is not None:
+        codigos_encontrados = decodificar_codigo_barra(foto_validade.getvalue())
+        if codigos_encontrados:
+            codigo_lido = codigos_encontrados[0]
+        else:
+            st.warning(
+                "⚠️ Não consegui ler nenhum código de barras nessa foto. "
+                "Tente de novo com mais luz e foco, ou digite o código abaixo."
+            )
+    codigo_busca = codigo_lido or (codigo_manual_validade.strip() if codigo_manual_validade else "")
+
+    if codigo_busca:
+        try:
+            with st.spinner("Consultando produto..."):
+                info = buscar_produto_todas_lojas(codigo_busca)
+        except Exception as e:
+            st.error(f"Erro ao consultar o produto: {e}")
+            info = None
+
+        if info is None:
+            st.error(f"❌ Nenhum produto encontrado com o código **{codigo_busca}**.")
+        else:
+            st.success(f"**{info['Produto']}** — Código {info['Codigo']}")
+            with st.form(key=f"form_validade_{codigo_busca}", clear_on_submit=True):
+                data_validade = st.date_input("Data de validade:")
+                quantidade = st.number_input(
+                    "Quantidade (unidades/caixas):", min_value=0.0, step=1.0, value=1.0
+                )
+                observacao_validade = st.text_area("Observação (opcional):", height=68)
+                registrar = st.form_submit_button("📅 Registrar validade", use_container_width=True)
+            if registrar:
+                try:
+                    salvar_validade(
+                        loja=st.session_state.loja_ronda,
+                        usuario=st.session_state.usuario_logado,
+                        produto=info["Produto"],
+                        codigo=info["Codigo"],
+                        codigo_barra=info["CodBarra"],
+                        data_validade=data_validade,
+                        quantidade=quantidade,
+                        observacao=observacao_validade.strip(),
+                    )
+                    buscar_validades.clear()
+                    st.success("📅 Validade registrada!")
+                except Exception as e:
+                    st.error(f"❌ Não deu pra salvar no banco agora: {e}")
+
+    st.divider()
+    st.markdown("#### ⚠️ Produtos cadastrados nesta loja")
+    dias_alerta = st.number_input(
+        "Avisar produtos que vencem em até quantos dias:", min_value=1, value=7, step=1
+    )
+
+    df_val = buscar_validades(st.session_state.loja_ronda) if erp_ativo() else pd.DataFrame()
+    if df_val is None or df_val.empty:
+        st.caption("Nenhum produto cadastrado nesta loja ainda.")
+        return
+
+    hoje = (datetime.now(timezone.utc) - timedelta(hours=3)).date()
+    df_val = df_val.copy()
+    df_val["dias_restantes"] = df_val["data_validade"].apply(
+        lambda d: (d - hoje).days if pd.notnull(d) else None
+    )
+    df_val["⚠️"] = df_val["dias_restantes"].apply(
+        lambda n: "⚠️ VENCE LOGO" if n is not None and n <= dias_alerta else ""
+    )
+    n_alerta = int((df_val["dias_restantes"] <= dias_alerta).sum())
+    if n_alerta:
+        st.warning(f"⚠️ {n_alerta} produto(s) vencendo em até {dias_alerta} dia(s) nesta loja.")
+
+    df_val["Baixado (retirado)"] = False
+    df_editado = st.data_editor(
+        df_val[[
+            "id", "⚠️", "produto", "codigo_barra", "data_validade", "dias_restantes",
+            "quantidade", "observacao", "Baixado (retirado)",
+        ]],
+        use_container_width=True,
+        hide_index=True,
+        column_order=[
+            "⚠️", "produto", "codigo_barra", "data_validade", "dias_restantes",
+            "quantidade", "observacao", "Baixado (retirado)",
+        ],
+        disabled=[
+            "⚠️", "produto", "codigo_barra", "data_validade", "dias_restantes",
+            "quantidade", "observacao",
+        ],
+        key="editor_validade",
+    )
+    ids_baixar = df_editado.loc[df_editado["Baixado (retirado)"], "id"].tolist()
+    if ids_baixar and st.button(
+        f"✅ Dar baixa em {len(ids_baixar)} produto(s) marcado(s)", use_container_width=True
+    ):
+        marcar_validades_baixadas(ids_baixar)
+        st.rerun()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # 🔍 CONSULTA NO BANCO — agora em TODAS as lojas de uma vez (sem seletor de loja)
 # ─────────────────────────────────────────────────────────────────────────────
 _PLACEHOLDERS_LOJAS = ", ".join(f"'{c}'" for c in LOJAS_CODIGOS)  # constantes fixas, não é input do usuário
@@ -535,6 +736,7 @@ if "loja_ronda" not in st.session_state:
 
 if erp_ativo():
     _garantir_tabela_ronda()
+    _garantir_tabela_validade()
 
 if not st.session_state.autenticado:
     st.write("")  # respiro no topo, igual ao Portal de Pedidos
@@ -622,32 +824,38 @@ with st.sidebar:
             st.rerun()
 
     st.divider()
-    st.markdown("**🚩 Ronda de preços**")
     st.session_state.loja_ronda = st.selectbox(
-        "Loja desta ronda:", LOJAS_NOMES,
+        "Loja atual:", LOJAS_NOMES,
         index=LOJAS_NOMES.index(st.session_state.loja_ronda),
         key="select_loja_ronda",
     )
-    # Vem direto do banco (não de session_state) — não some se a página recarregar.
-    df_erros_loja = buscar_erros_ronda(st.session_state.loja_ronda) if erp_ativo() else pd.DataFrame()
-    if df_erros_loja is not None and not df_erros_loja.empty:
-        st.caption(f"🚩 {len(df_erros_loja)} produto(s) marcado(s) com erro de preço nesta loja")
-        pdf_bytes = gerar_pdf_ronda(df_erros_loja, st.session_state.loja_ronda)
-        st.download_button(
-            "📄 Gerar PDF da ronda",
-            data=pdf_bytes,
-            file_name=f"ronda_precos_{st.session_state.loja_ronda.replace(' ', '_')}.pdf",
-            mime="application/pdf",
-            use_container_width=True,
-        )
-        if st.button("✅ Marcar como resolvidos (já impressos)", use_container_width=True):
-            marcar_erros_resolvidos(st.session_state.loja_ronda)
-            st.rerun()
-    else:
-        st.caption("Nenhum produto marcado com erro de preço nesta loja.")
+    modo_app = st.radio(
+        "📂 Módulo:", ["🔍 Consulta de Estoque", "📅 Controle de Validade"],
+        key="modo_app",
+    )
+
+    if modo_app == "🔍 Consulta de Estoque":
+        st.divider()
+        st.markdown("**🚩 Ronda de preços**")
+        # Vem direto do banco (não de session_state) — não some se a página recarregar.
+        df_erros_loja = buscar_erros_ronda(st.session_state.loja_ronda) if erp_ativo() else pd.DataFrame()
+        if df_erros_loja is not None and not df_erros_loja.empty:
+            st.caption(f"🚩 {len(df_erros_loja)} produto(s) marcado(s) com erro de preço nesta loja")
+            pdf_bytes = gerar_pdf_ronda(df_erros_loja, st.session_state.loja_ronda)
+            st.download_button(
+                "📄 Gerar PDF da ronda",
+                data=pdf_bytes,
+                file_name=f"ronda_precos_{st.session_state.loja_ronda.replace(' ', '_')}.pdf",
+                mime="application/pdf",
+                use_container_width=True,
+            )
+            if st.button("✅ Marcar como resolvidos (já impressos)", use_container_width=True):
+                marcar_erros_resolvidos(st.session_state.loja_ronda)
+                st.rerun()
+        else:
+            st.caption("Nenhum produto marcado com erro de preço nesta loja.")
 
 desenhar_banner(subtitulo=f"Usuário: {st.session_state.usuario_logado}")
-st.caption("Fotografe o código de barras do produto para ver o estoque em todas as lojas e o preço na hora.")
 
 if not erp_ativo():
     st.warning(
@@ -655,6 +863,12 @@ if not erp_ativo():
         "(ERP_ATIVO = false no secrets). Não é possível consultar produtos agora."
     )
     st.stop()
+
+if st.session_state.modo_app == "📅 Controle de Validade":
+    renderizar_modulo_validade()
+    st.stop()
+
+st.caption("Fotografe o código de barras do produto para ver o estoque em todas as lojas e o preço na hora.")
 
 if "codigo_barra_atual" not in st.session_state:
     st.session_state.codigo_barra_atual = ""
