@@ -1007,17 +1007,6 @@ def mostrar_resultado(codigo_busca: str, registrar_historico: bool):
         tabela_combinada = pd.DataFrame(linhas_tabela).set_index("Loja")
         st.dataframe(tabela_combinada, use_container_width=True)
 
-        # Preço varia por loja — escolhe de qual loja sai o preço impresso na etiqueta.
-        st.markdown("**🖨️ Imprimir etiqueta de preço (Zebra ZQ630 Plus)**")
-        loja_etiqueta = st.selectbox(
-            "Preço da loja para a etiqueta:", LOJAS_NOMES, key="loja_etiqueta_impressao"
-        )
-        botao_imprimir_zebra({
-            "Produto": info["Produto"],
-            "CodBarra": info["CodBarra"],
-            "PrecoTxt": preco_para_texto(info["PrecoPorLoja"][loja_etiqueta]),
-        })
-
         # ── Ronda: marcar preço errado na gôndola ─────────────────────────
         st.markdown("**🚩 Preço errado na gôndola?**")
         st.caption(
