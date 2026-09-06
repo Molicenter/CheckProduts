@@ -48,8 +48,16 @@ LOJAS_NOMES = ["Loja 01", "Loja 02", "Loja 03", "Loja 04", "Loja 05", "Loja 06",
 # o código consultado no banco continua batendo certo.
 LOJAS_CODIGOS = [f"{int(''.join(ch for ch in nome if ch.isdigit())):03d}" for nome in LOJAS_NOMES]
 
-# Senha fixa de acesso — gate simples (não é autenticação forte), conforme pedido.
-SENHA_ACESSO = "moli1234"
+# Senhas fixas de acesso — gate simples (não é autenticação forte), conforme pedido.
+# Mesmo padrão dos outros apps do Molicenter (Despesas-Comp, Quadro-Lotação etc.):
+# um usuário por loja + administrador, senha única por perfil.
+SENHA_ACESSO = "moli1234"     # lojas
+SENHA_ADMIN = "moli0000"      # administrador
+
+USUARIOS_DB = {"administrador": {"senha": SENHA_ADMIN, "perfil": "admin", "loja": None}}
+for _nome_loja in LOJAS_NOMES:
+    _digitos_loja = "".join(ch for ch in _nome_loja if ch.isdigit())
+    USUARIOS_DB[f"loja{_digitos_loja}"] = {"senha": SENHA_ACESSO, "perfil": "loja", "loja": _nome_loja}
 
 COR_BANNER = "#122C43"          # navy do topo (telas internas)
 COR_SIDEBAR = "#132A41"         # navy da sidebar
@@ -462,6 +470,9 @@ def gerar_pdf_ronda(df_erros: pd.DataFrame, loja_ronda: str) -> bytes:
 # 📅 CONTROLE DE VALIDADE — cadastro de validade por produto/loja (mesma ideia
 # da Ronda de Preços: grava direto no Postgres, não em session_state).
 # ─────────────────────────────────────────────────────────────────────────────
+# Oculto do menu por um tempo (pedido do Adriano, 06/set/2026) — o módulo
+# continua funcionando por trás; troque pra True aqui pra reexibir no menu.
+EXIBIR_CONTROLE_VALIDADE = False
 TABELA_VALIDADE = "controle_validade"
 
 
@@ -826,14 +837,20 @@ if not st.session_state.autenticado:
             # st.form: captura todos os campos juntos no clique do botão, sem
             # depender do usuário apertar Enter em cada campo antes (era essa a
             # causa do "Senha incorreta" — o clique lia o valor antigo/vazio).
+            #
+            # Usuário agora é uma caixa de seleção (administrador + lojas), no
+            # mesmo padrão dos outros apps do Molicenter (Despesas-Comp,
+            # Quadro-Lotação...) — de quebra, some com a sugestão de
+            # autopreenchimento de e-mail/endereço que o Chrome mostrava no
+            # campo de texto livre.
+            lista_usuarios = ["Selecione..."] + list(USUARIOS_DB.keys())
             with st.form("form_login", clear_on_submit=False):
                 st.markdown(
                     f"<span style='color:{COR_LABEL_USUARIO};font-weight:600;'>👤 Usuário de acesso:</span>",
                     unsafe_allow_html=True,
                 )
-                usuario = st.text_input(
-                    "Usuário de acesso", label_visibility="collapsed", placeholder="Digite seu nome",
-                    autocomplete="username",
+                usuario = st.selectbox(
+                    "Usuário de acesso", lista_usuarios, label_visibility="collapsed",
                 )
 
                 st.markdown(
@@ -855,14 +872,22 @@ if not st.session_state.autenticado:
                 )
 
             if entrar:
-                if not usuario.strip():
-                    st.error("Informe o usuário.")
-                elif senha.strip() != SENHA_ACESSO:
-                    st.error("Senha incorreta.")
+                if usuario == "Selecione...":
+                    st.warning("Selecione um usuário.")
                 else:
-                    st.session_state.autenticado = True
-                    st.session_state.usuario_logado = usuario.strip()
-                    st.rerun()
+                    dados_usuario = USUARIOS_DB[usuario]
+                    if senha.strip() != dados_usuario["senha"]:
+                        st.error("Senha incorreta.")
+                    else:
+                        st.session_state.autenticado = True
+                        st.session_state.usuario_logado = usuario
+                        st.session_state.perfil_logado = dados_usuario["perfil"]
+                        if dados_usuario["loja"]:
+                            # Login de loja já entra com a loja certa
+                            # selecionada no menu lateral — não precisa
+                            # escolher de novo.
+                            st.session_state.loja_ronda = dados_usuario["loja"]
+                        st.rerun()
     st.stop()
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -887,10 +912,14 @@ with st.sidebar:
         index=LOJAS_NOMES.index(st.session_state.loja_ronda),
         key="select_loja_ronda",
     )
-    modo_app = st.radio(
-        "📂 Módulo:", ["🔍 Consulta de Estoque", "📅 Controle de Validade"],
-        key="modo_app",
-    )
+    opcoes_modulo = ["🔍 Consulta de Estoque"]
+    if EXIBIR_CONTROLE_VALIDADE:
+        opcoes_modulo.append("📅 Controle de Validade")
+    if len(opcoes_modulo) > 1:
+        modo_app = st.radio("📂 Módulo:", opcoes_modulo, key="modo_app")
+    else:
+        modo_app = opcoes_modulo[0]
+        st.session_state.modo_app = modo_app
 
     if modo_app == "🔍 Consulta de Estoque":
         st.divider()
