@@ -516,21 +516,25 @@ def gerar_pdf_historico(historico: list, usuario: str) -> bytes:
     historia.append(Paragraph(f"Gerado em: {data_hora_brasilia()}", estilos["Normal"]))
     historia.append(Spacer(1, 0.6 * cm))
 
-    cabecalho = ["Hora", "Produto", "Código", "Cód. Barra", "Estoque Total"]
+    cabecalho = ["Data", "Produto", "Código", "Cód. Barra", "Preço", "Estoque Total"]
     linhas = [cabecalho]
     for h in historico:
+        # "Hora" vem como "dd/mm/aaaa HH:MM:SS" — no PDF fica só a data (o
+        # pedaço antes do espaço), sem hora/minuto/segundo.
+        data_registro = str(h.get("Hora", "-") or "-").split(" ")[0]
         estoque_total = h.get("Estoque", {}).get("Total", "-")
         linhas.append([
-            Paragraph(str(h.get("Hora", "-") or "-"), estilos["Normal"]),
+            Paragraph(data_registro, estilos["Normal"]),
             Paragraph(str(h.get("Produto", "-") or "-"), estilos["Normal"]),
             Paragraph(str(h.get("Código", "-") or "-"), estilos["Normal"]),
             Paragraph(str(h.get("Cód. Barra", "-") or "-"), estilos["Normal"]),
+            Paragraph(str(h.get("PrecoSistema", "-") or "-"), estilos["Normal"]),
             Paragraph(str(estoque_total), estilos["Normal"]),
         ])
 
     tabela = Table(
         linhas,
-        colWidths=[2.6 * cm, 7.5 * cm, 2.2 * cm, 3.2 * cm, 2.5 * cm],
+        colWidths=[2.0 * cm, 6.3 * cm, 2.0 * cm, 3.0 * cm, 2.2 * cm, 2.5 * cm],
         repeatRows=1,
     )
     tabela.setStyle(TableStyle([
@@ -1200,6 +1204,9 @@ def mostrar_resultado(codigo_busca: str, registrar_historico: bool):
                 "Preco": {loja: preco_para_texto(v) for loja, v in info["PrecoPorLoja"].items()},
                 "Oferta": {loja: oferta_para_texto(v) for loja, v in info["OfertaPorLoja"].items()},
                 "DataPreco": {loja: data_preco_para_texto(v) for loja, v in info["DataPrecoPorLoja"].items()},
+                # Preço do sistema na loja da ronda no momento da consulta — é o
+                # valor que sai no PDF do histórico (uma coluna só, não uma por loja).
+                "PrecoSistema": preco_para_texto(info["PrecoPorLoja"].get(st.session_state.loja_ronda)),
             }
             st.session_state.historico_scans.insert(0, linha_hist)
     else:
