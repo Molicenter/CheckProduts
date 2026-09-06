@@ -12,7 +12,7 @@ from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import cm
 from reportlab.lib import colors
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
-from reportlab.lib.styles import getSampleStyleSheet
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from sqlalchemy import text
 
 try:
@@ -509,6 +509,9 @@ def gerar_pdf_historico(historico: list, usuario: str) -> bytes:
         leftMargin=1.5 * cm, rightMargin=1.5 * cm,
     )
     estilos = getSampleStyleSheet()
+    # estilos["Normal"] é 10pt — largo demais pras colunas estreitas (a data
+    # quebrava linha). Fonte menor só nas células da tabela.
+    estilo_celula = ParagraphStyle("celula_historico", parent=estilos["Normal"], fontSize=8, leading=9.5)
     historia = []
 
     historia.append(Paragraph("Histórico de Consultas — Check Produtos", estilos["Title"]))
@@ -524,12 +527,12 @@ def gerar_pdf_historico(historico: list, usuario: str) -> bytes:
         data_registro = str(h.get("Hora", "-") or "-").split(" ")[0]
         estoque_total = h.get("Estoque", {}).get("Total", "-")
         linhas.append([
-            Paragraph(data_registro, estilos["Normal"]),
-            Paragraph(str(h.get("Produto", "-") or "-"), estilos["Normal"]),
-            Paragraph(str(h.get("Código", "-") or "-"), estilos["Normal"]),
-            Paragraph(str(h.get("Cód. Barra", "-") or "-"), estilos["Normal"]),
-            Paragraph(str(h.get("PrecoSistema", "-") or "-"), estilos["Normal"]),
-            Paragraph(str(estoque_total), estilos["Normal"]),
+            Paragraph(data_registro, estilo_celula),
+            Paragraph(str(h.get("Produto", "-") or "-"), estilo_celula),
+            Paragraph(str(h.get("Código", "-") or "-"), estilo_celula),
+            Paragraph(str(h.get("Cód. Barra", "-") or "-"), estilo_celula),
+            Paragraph(str(h.get("PrecoSistema", "-") or "-"), estilo_celula),
+            Paragraph(str(estoque_total), estilo_celula),
         ])
 
     tabela = Table(
@@ -541,7 +544,7 @@ def gerar_pdf_historico(historico: list, usuario: str) -> bytes:
         ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#D6218C")),
         ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
         ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-        ("FONTSIZE", (0, 0), (-1, -1), 9),
+        ("FONTSIZE", (0, 0), (-1, 0), 8),
         ("GRID", (0, 0), (-1, -1), 0.5, colors.grey),
         ("VALIGN", (0, 0), (-1, -1), "TOP"),
         ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#F0F2F6")]),
