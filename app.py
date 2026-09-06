@@ -498,6 +498,59 @@ def gerar_pdf_ronda(df_erros: pd.DataFrame, loja_ronda: str) -> bytes:
     return buffer.getvalue()
 
 
+def gerar_pdf_historico(historico: list, usuario: str) -> bytes:
+    """Gera um PDF-checklist com todos os produtos consultados nesta sessão
+    (mesma lista do 'Histórico desta sessão' na tela) — pra guardar ou
+    imprimir o que foi conferido, mesmo os que não tiveram erro de preço."""
+    buffer = BytesIO()
+    doc = SimpleDocTemplate(
+        buffer, pagesize=A4,
+        topMargin=1.5 * cm, bottomMargin=1.5 * cm,
+        leftMargin=1.5 * cm, rightMargin=1.5 * cm,
+    )
+    estilos = getSampleStyleSheet()
+    historia = []
+
+    historia.append(Paragraph("Histórico de Consultas — Check Produtos", estilos["Title"]))
+    historia.append(Paragraph(f"Usuário: {usuario}", estilos["Heading2"]))
+    historia.append(Paragraph(f"Gerado em: {data_hora_brasilia()}", estilos["Normal"]))
+    historia.append(Spacer(1, 0.6 * cm))
+
+    cabecalho = ["Hora", "Produto", "Código", "Cód. Barra", "Estoque Total"]
+    linhas = [cabecalho]
+    for h in historico:
+        estoque_total = h.get("Estoque", {}).get("Total", "-")
+        linhas.append([
+            Paragraph(str(h.get("Hora", "-") or "-"), estilos["Normal"]),
+            Paragraph(str(h.get("Produto", "-") or "-"), estilos["Normal"]),
+            Paragraph(str(h.get("Código", "-") or "-"), estilos["Normal"]),
+            Paragraph(str(h.get("Cód. Barra", "-") or "-"), estilos["Normal"]),
+            Paragraph(str(estoque_total), estilos["Normal"]),
+        ])
+
+    tabela = Table(
+        linhas,
+        colWidths=[2.6 * cm, 7.5 * cm, 2.2 * cm, 3.2 * cm, 2.5 * cm],
+        repeatRows=1,
+    )
+    tabela.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#D6218C")),
+        ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+        ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+        ("FONTSIZE", (0, 0), (-1, -1), 9),
+        ("GRID", (0, 0), (-1, -1), 0.5, colors.grey),
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#F0F2F6")]),
+    ]))
+    historia.append(tabela)
+    historia.append(Spacer(1, 0.6 * cm))
+    historia.append(Paragraph(f"Total de itens: {len(historico)}", estilos["Normal"]))
+
+    doc.build(historia)
+    buffer.seek(0)
+    return buffer.getvalue()
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # 📅 CONTROLE DE VALIDADE — cadastro de validade por produto/loja (mesma ideia
 # da Ronda de Preços: grava direto no Postgres, não em session_state).
@@ -944,6 +997,16 @@ with st.sidebar:
     st.divider()
     if st.session_state.historico_scans:
         st.caption(f"📋 {len(st.session_state.historico_scans)} produto(s) consultado(s) nesta sessão")
+        pdf_historico_bytes = gerar_pdf_historico(
+            st.session_state.historico_scans, st.session_state.usuario_logado
+        )
+        st.download_button(
+            "📄 Gerar PDF do histórico",
+            data=pdf_historico_bytes,
+            file_name=f"historico_consultas_{st.session_state.usuario_logado}.pdf",
+            mime="application/pdf",
+            use_container_width=True,
+        )
         if st.button("🧹 Limpar histórico", use_container_width=True):
             st.session_state.historico_scans = []
             st.rerun()
