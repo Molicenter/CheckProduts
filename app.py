@@ -330,6 +330,17 @@ def data_preco_para_texto(v) -> str:
     return str(v)
 
 
+# Colunas estreitas na tabela por loja (Estoque/Preço/Ofertas/Data Preço) —
+# sem isso o st.dataframe distribui a largura toda entre poucas colunas e
+# cada uma fica enorme (usado tanto no resultado principal quanto no histórico).
+_CONFIG_COLUNAS_TABELA_LOJA = {
+    "📦 Estoque": st.column_config.NumberColumn(width="small"),
+    "💰 Preço": st.column_config.TextColumn(width="small"),
+    "🏷️ Ofertas": st.column_config.TextColumn(width="small"),
+    "📅 Data Preço": st.column_config.TextColumn(width="small"),
+}
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # 🖨️ IMPRESSÃO NA ZEBRA ZQ630 PLUS (via app "Zebra Browser Print" no Android)
 #
@@ -1074,7 +1085,7 @@ def mostrar_resultado(codigo_busca: str, registrar_historico: bool):
             "🏷️ Ofertas": "", "📅 Data Preço": "",
         })
         tabela_combinada = pd.DataFrame(linhas_tabela).set_index("Loja")
-        st.dataframe(tabela_combinada, use_container_width=True)
+        st.dataframe(tabela_combinada, use_container_width=True, column_config=_CONFIG_COLUNAS_TABELA_LOJA)
 
         # ── Ronda: marcar preço errado na gôndola ─────────────────────────
         st.markdown("**🚩 Preço errado na gôndola?**")
@@ -1168,4 +1179,8 @@ if st.session_state.historico_scans:
                 "Loja": "Total", "📦 Estoque": estoque_h.get("Total", ""), "💰 Preço": "",
                 "🏷️ Ofertas": "", "📅 Data Preço": "",
             })
-            st.dataframe(pd.DataFrame(linhas).set_index("Loja"), use_container_width=True)
+            st.dataframe(
+                pd.DataFrame(linhas).set_index("Loja"),
+                use_container_width=True,
+                column_config=_CONFIG_COLUNAS_TABELA_LOJA,
+            )
