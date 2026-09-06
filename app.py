@@ -1115,6 +1115,11 @@ def mostrar_resultado(codigo_busca: str, registrar_historico: bool):
                 )
                 buscar_erros_ronda.clear()
                 st.success("🚩 Marcado e salvo no banco! Vai aparecer no PDF da ronda (menu lateral).")
+                # Sem isso, a sidebar (que já rodou mais cedo NESTA MESMA execução,
+                # antes do banco ser atualizado) ficava com a leitura antiga — o
+                # botão de PDF só aparecia depois de outra ação qualquer forçar um
+                # novo rerun. Com st.rerun() aqui, a sidebar já nasce atualizada.
+                st.rerun()
             except Exception as e:
                 st.error(f"❌ Não deu pra salvar no banco agora: {e}")
 
