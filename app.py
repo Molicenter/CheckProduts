@@ -54,10 +54,10 @@ LOJAS_CODIGOS = [f"{int(''.join(ch for ch in nome if ch.isdigit())):03d}" for no
 SENHA_ACESSO = "moli1234"     # lojas
 SENHA_ADMIN = "moli0000"      # administrador
 
-USUARIOS_DB = {"administrador": {"senha": SENHA_ADMIN, "perfil": "admin", "loja": None}}
+USUARIOS_DB = {"Administrador": {"senha": SENHA_ADMIN, "perfil": "admin", "loja": None}}
 for _nome_loja in LOJAS_NOMES:
     _digitos_loja = "".join(ch for ch in _nome_loja if ch.isdigit())
-    USUARIOS_DB[f"loja{_digitos_loja}"] = {"senha": SENHA_ACESSO, "perfil": "loja", "loja": _nome_loja}
+    USUARIOS_DB[f"Loja{_digitos_loja}"] = {"senha": SENHA_ACESSO, "perfil": "loja", "loja": _nome_loja}
 
 COR_BANNER = "#122C43"          # navy do topo (telas internas)
 COR_SIDEBAR = "#132A41"         # navy da sidebar
@@ -307,6 +307,27 @@ def preco_para_texto(v) -> str:
         return f"R$ {float(v):.2f}".replace(".", ",")
     except (ValueError, TypeError):
         return "-"
+
+
+def oferta_para_texto(v) -> str:
+    # cade_oferta vem do ERP como 'S'/branco (ou similar) — normaliza pra Sim/Não.
+    try:
+        if v is None or pd.isna(v):
+            return "Não"
+    except (TypeError, ValueError):
+        pass
+    return "Sim" if str(v).strip().upper() in ("S", "SIM", "TRUE", "1") else "Não"
+
+
+def data_preco_para_texto(v) -> str:
+    try:
+        if v is None or pd.isna(v):
+            return "-"
+    except (TypeError, ValueError):
+        pass
+    if hasattr(v, "strftime"):
+        return v.strftime("%d/%m/%Y")
+    return str(v)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -742,7 +763,9 @@ def buscar_produto_todas_lojas(codigo_barra: str):
                cadp_descricao    AS "Produto",
                cadp_codigobarra  AS "CodBarra",
                estoque           AS "Estoque",
-               prvenda           AS "Preco"
+               prvenda           AS "Preco",
+               cade_oferta       AS "Oferta",
+               cade_dtprvenda    AS "DataPreco"
         FROM python_estoque
         WHERE cadp_codigobarra = :barra
           AND cade_codempresa IN ({_PLACEHOLDERS_LOJAS})
@@ -763,15 +786,23 @@ def buscar_produto_todas_lojas(codigo_barra: str):
     }
     estoque_por_loja = {}
     preco_por_loja = {}
+    oferta_por_loja = {}
+    data_preco_por_loja = {}
     for nome, cod in zip(LOJAS_NOMES, LOJAS_CODIGOS):
         linha = df[df["Loja"] == cod]
         valor_estoque = linha["Estoque"].iloc[0] if not linha.empty else None
         valor_preco = linha["Preco"].iloc[0] if not linha.empty else None
+        valor_oferta = linha["Oferta"].iloc[0] if not linha.empty else None
+        valor_data_preco = linha["DataPreco"].iloc[0] if not linha.empty else None
         estoque_por_loja[nome] = float(valor_estoque) if pd.notna(valor_estoque) else 0.0
         preco_por_loja[nome] = valor_preco if pd.notna(valor_preco) else None
+        oferta_por_loja[nome] = valor_oferta
+        data_preco_por_loja[nome] = valor_data_preco
     info["EstoquePorLoja"] = estoque_por_loja
     info["EstoqueTotal"] = sum(estoque_por_loja.values())
     info["PrecoPorLoja"] = preco_por_loja
+    info["OfertaPorLoja"] = oferta_por_loja
+    info["DataPrecoPorLoja"] = data_preco_por_loja
     return info
 
 
@@ -1029,10 +1060,19 @@ def mostrar_resultado(codigo_busca: str, registrar_historico: bool):
         # rolar pros lados (o formato anterior, loja por coluna, ficava cortado
         # no mobile com só 4 das 8 lojas visíveis).
         linhas_tabela = [
-            {"Loja": loja, "📦 Estoque": info["EstoquePorLoja"][loja], "💰 Preço": preco_para_texto(info["PrecoPorLoja"][loja])}
+            {
+                "Loja": loja,
+                "📦 Estoque": info["EstoquePorLoja"][loja],
+                "💰 Preço": preco_para_texto(info["PrecoPorLoja"][loja]),
+                "🏷️ Ofertas": oferta_para_texto(info["OfertaPorLoja"][loja]),
+                "📅 Data Preço": data_preco_para_texto(info["DataPrecoPorLoja"][loja]),
+            }
             for loja in LOJAS_NOMES
         ]
-        linhas_tabela.append({"Loja": "Total", "📦 Estoque": info["EstoqueTotal"], "💰 Preço": ""})
+        linhas_tabela.append({
+            "Loja": "Total", "📦 Estoque": info["EstoqueTotal"], "💰 Preço": "",
+            "🏷️ Ofertas": "", "📅 Data Preço": "",
+        })
         tabela_combinada = pd.DataFrame(linhas_tabela).set_index("Loja")
         st.dataframe(tabela_combinada, use_container_width=True)
 
@@ -1079,6 +1119,8 @@ def mostrar_resultado(codigo_busca: str, registrar_historico: bool):
                 **base_hist,
                 "Estoque": {**info["EstoquePorLoja"], "Total": info["EstoqueTotal"]},
                 "Preco": {loja: preco_para_texto(v) for loja, v in info["PrecoPorLoja"].items()},
+                "Oferta": {loja: oferta_para_texto(v) for loja, v in info["OfertaPorLoja"].items()},
+                "DataPreco": {loja: data_preco_para_texto(v) for loja, v in info["DataPrecoPorLoja"].items()},
             }
             st.session_state.historico_scans.insert(0, linha_hist)
     else:
@@ -1110,9 +1152,20 @@ if st.session_state.historico_scans:
             st.caption(f"Usuário: {h.get('Usuário', '-')} · Cód. Barra: {h.get('Cód. Barra', '-')}")
             estoque_h = h.get("Estoque", {})
             preco_h = h.get("Preco", {})
+            oferta_h = h.get("Oferta", {})
+            data_preco_h = h.get("DataPreco", {})
             linhas = [
-                {"Loja": loja, "📦 Estoque": estoque_h.get(loja, ""), "💰 Preço": preco_h.get(loja, "")}
+                {
+                    "Loja": loja,
+                    "📦 Estoque": estoque_h.get(loja, ""),
+                    "💰 Preço": preco_h.get(loja, ""),
+                    "🏷️ Ofertas": oferta_h.get(loja, ""),
+                    "📅 Data Preço": data_preco_h.get(loja, ""),
+                }
                 for loja in LOJAS_NOMES
             ]
-            linhas.append({"Loja": "Total", "📦 Estoque": estoque_h.get("Total", ""), "💰 Preço": ""})
+            linhas.append({
+                "Loja": "Total", "📦 Estoque": estoque_h.get("Total", ""), "💰 Preço": "",
+                "🏷️ Ofertas": "", "📅 Data Preço": "",
+            })
             st.dataframe(pd.DataFrame(linhas).set_index("Loja"), use_container_width=True)
