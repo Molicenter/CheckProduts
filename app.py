@@ -261,10 +261,10 @@ def marcar_erros_resolvidos(loja: str):
 # 📷 LEITURA DO CÓDIGO DE BARRA NA FOTO (pyzbar, com fallback no OpenCV)
 # ─────────────────────────────────────────────────────────────────────────────
 try:
-    from pyzbar.pyzbar import decode as _zbar_decode
-    _TEM_PYZBAR = True
+    import zxingcpp
+    _TEM_ZXING = True
 except Exception:
-    _TEM_PYZBAR = False
+    _TEM_ZXING = False
 
 
 def decodificar_codigo_barra(imagem_bytes: bytes) -> list:
@@ -273,11 +273,11 @@ def decodificar_codigo_barra(imagem_bytes: bytes) -> list:
     if img is None:
         return []
 
-    codigos = []
-    if _TEM_PYZBAR:
+        codigos = []
+    if _TEM_ZXING:
         try:
-            for obj in _zbar_decode(img):
-                texto = obj.data.decode("utf-8", errors="ignore").strip()
+            for resultado in zxingcpp.read_barcodes(img):
+                texto = (resultado.text or "").strip()
                 if texto:
                     codigos.append(texto)
         except Exception:
