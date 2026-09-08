@@ -3,7 +3,7 @@ pandas
 sqlalchemy
 psycopg2-binary
 opencv-python-headless
-pyzbar
+zxing-cpp
 numpy
 streamlit-back-camera-input
 reportlab
