@@ -258,7 +258,7 @@ def marcar_erros_resolvidos(loja: str):
     buscar_erros_ronda.clear()
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 📷 LEITURA DO CÓDIGO DE BARRA NA FOTO (pyzbar, com fallback no OpenCV)
+# 📷 LEITURA DO CÓDIGO DE BARRA NA FOTO (zxing-cpp, com fallback no OpenCV)
 # ─────────────────────────────────────────────────────────────────────────────
 try:
     import zxingcpp
@@ -273,7 +273,7 @@ def decodificar_codigo_barra(imagem_bytes: bytes) -> list:
     if img is None:
         return []
 
-        codigos = []
+    codigos = []
     if _TEM_ZXING:
         try:
             for resultado in zxingcpp.read_barcodes(img):
