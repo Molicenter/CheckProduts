@@ -309,14 +309,18 @@ def preco_para_texto(v) -> str:
         return "-"
 
 
-def oferta_para_texto(v) -> str:
-    # cade_oferta vem do ERP como 'S'/branco (ou similar) — normaliza pra Sim/Não.
+def oferta_para_texto(v_oferta, v_preco_oferta=None) -> str:
+    # cade_oferta vem do ERP como 'S'/branco (ou similar). Antes normalizava pra
+    # Sim/Não; agora, quando está em oferta, mostra o valor do preço promocional
+    # (proferta) formatado, em vez de só "Sim".
     try:
-        if v is None or pd.isna(v):
+        if v_oferta is None or pd.isna(v_oferta):
             return "Não"
     except (TypeError, ValueError):
         pass
-    return "Sim" if str(v).strip().upper() in ("S", "SIM", "TRUE", "1") else "Não"
+    if str(v_oferta).strip().upper() in ("S", "SIM", "TRUE", "1"):
+        return preco_para_texto(v_preco_oferta)
+    return "Não"
 
 
 def data_preco_para_texto(v) -> str:
@@ -330,14 +334,14 @@ def data_preco_para_texto(v) -> str:
     return str(v)
 
 
-# Colunas estreitas na tabela por loja (Estoque/Preço/Dt R$/Ofertas) —
+# Colunas estreitas na tabela por loja (Estoque/Preço/Oferta/Dt R$) —
 # sem isso o st.dataframe distribui a largura toda entre poucas colunas e
 # cada uma fica enorme (usado tanto no resultado principal quanto no histórico).
 _CONFIG_COLUNAS_TABELA_LOJA = {
     "📦 Estoque": st.column_config.NumberColumn(width="small"),
     "💰 Preço": st.column_config.TextColumn(width="small"),
+    "🏷️ Oferta": st.column_config.TextColumn(width="small"),
     "📅 Dt R$": st.column_config.TextColumn(width="small"),
-    "🏷️ Ofertas": st.column_config.TextColumn(width="small"),
 }
 
 
@@ -836,6 +840,7 @@ def buscar_produto_todas_lojas(codigo_barra: str):
                estoque           AS "Estoque",
                prvenda           AS "Preco",
                cade_oferta       AS "Oferta",
+               proferta          AS "PrecoOferta",
                cade_dtprvenda    AS "DataPreco"
         FROM python_estoque
         WHERE cadp_codigobarra = :barra
@@ -858,21 +863,25 @@ def buscar_produto_todas_lojas(codigo_barra: str):
     estoque_por_loja = {}
     preco_por_loja = {}
     oferta_por_loja = {}
+    preco_oferta_por_loja = {}
     data_preco_por_loja = {}
     for nome, cod in zip(LOJAS_NOMES, LOJAS_CODIGOS):
         linha = df[df["Loja"] == cod]
         valor_estoque = linha["Estoque"].iloc[0] if not linha.empty else None
         valor_preco = linha["Preco"].iloc[0] if not linha.empty else None
         valor_oferta = linha["Oferta"].iloc[0] if not linha.empty else None
+        valor_preco_oferta = linha["PrecoOferta"].iloc[0] if not linha.empty else None
         valor_data_preco = linha["DataPreco"].iloc[0] if not linha.empty else None
         estoque_por_loja[nome] = float(valor_estoque) if pd.notna(valor_estoque) else 0.0
         preco_por_loja[nome] = valor_preco if pd.notna(valor_preco) else None
         oferta_por_loja[nome] = valor_oferta
+        preco_oferta_por_loja[nome] = valor_preco_oferta if pd.notna(valor_preco_oferta) else None
         data_preco_por_loja[nome] = valor_data_preco
     info["EstoquePorLoja"] = estoque_por_loja
     info["EstoqueTotal"] = sum(estoque_por_loja.values())
     info["PrecoPorLoja"] = preco_por_loja
     info["OfertaPorLoja"] = oferta_por_loja
+    info["PrecoOfertaPorLoja"] = preco_oferta_por_loja
     info["DataPrecoPorLoja"] = data_preco_por_loja
     return info
 
@@ -1145,14 +1154,16 @@ def mostrar_resultado(codigo_busca: str, registrar_historico: bool):
                 "Loja": loja,
                 "📦 Estoque": info["EstoquePorLoja"][loja],
                 "💰 Preço": preco_para_texto(info["PrecoPorLoja"][loja]),
+                "🏷️ Oferta": oferta_para_texto(
+                    info["OfertaPorLoja"][loja], info["PrecoOfertaPorLoja"][loja]
+                ),
                 "📅 Dt R$": data_preco_para_texto(info["DataPrecoPorLoja"][loja]),
-                "🏷️ Ofertas": oferta_para_texto(info["OfertaPorLoja"][loja]),
             }
             for loja in LOJAS_NOMES
         ]
         linhas_tabela.append({
             "Loja": "Total", "📦 Estoque": info["EstoqueTotal"], "💰 Preço": "",
-            "📅 Dt R$": "", "🏷️ Ofertas": "",
+            "🏷️ Oferta": "", "📅 Dt R$": "",
         })
         tabela_combinada = pd.DataFrame(linhas_tabela).set_index("Loja")
         st.dataframe(tabela_combinada, use_container_width=True, column_config=_CONFIG_COLUNAS_TABELA_LOJA)
@@ -1205,7 +1216,10 @@ def mostrar_resultado(codigo_busca: str, registrar_historico: bool):
                 **base_hist,
                 "Estoque": {**info["EstoquePorLoja"], "Total": info["EstoqueTotal"]},
                 "Preco": {loja: preco_para_texto(v) for loja, v in info["PrecoPorLoja"].items()},
-                "Oferta": {loja: oferta_para_texto(v) for loja, v in info["OfertaPorLoja"].items()},
+                "Oferta": {
+                    loja: oferta_para_texto(v, info["PrecoOfertaPorLoja"].get(loja))
+                    for loja, v in info["OfertaPorLoja"].items()
+                },
                 "DataPreco": {loja: data_preco_para_texto(v) for loja, v in info["DataPrecoPorLoja"].items()},
                 # Preço do sistema na loja da ronda no momento da consulta — é o
                 # valor que sai no PDF do histórico (uma coluna só, não uma por loja).
@@ -1248,14 +1262,14 @@ if st.session_state.historico_scans:
                     "Loja": loja,
                     "📦 Estoque": estoque_h.get(loja, ""),
                     "💰 Preço": preco_h.get(loja, ""),
+                    "🏷️ Oferta": oferta_h.get(loja, ""),
                     "📅 Dt R$": data_preco_h.get(loja, ""),
-                    "🏷️ Ofertas": oferta_h.get(loja, ""),
                 }
                 for loja in LOJAS_NOMES
             ]
             linhas.append({
                 "Loja": "Total", "📦 Estoque": estoque_h.get("Total", ""), "💰 Preço": "",
-                "📅 Dt R$": "", "🏷️ Ofertas": "",
+                "🏷️ Oferta": "", "📅 Dt R$": "",
             })
             st.dataframe(
                 pd.DataFrame(linhas).set_index("Loja"),
