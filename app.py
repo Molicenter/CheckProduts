@@ -340,7 +340,7 @@ def data_preco_para_texto(v) -> str:
 _CONFIG_COLUNAS_TABELA_LOJA = {
     "📦 Estoque": st.column_config.NumberColumn(width="small"),
     "💰 Preço": st.column_config.TextColumn(width="small"),
-    "🏷️ Oferta": st.column_config.TextColumn(width="small"),
+    "🏷️ Clube": st.column_config.TextColumn(width="small"),
     "📅 Dt R$": st.column_config.TextColumn(width="small"),
 }
 
@@ -1154,7 +1154,7 @@ def mostrar_resultado(codigo_busca: str, registrar_historico: bool):
                 "Loja": loja,
                 "📦 Estoque": info["EstoquePorLoja"][loja],
                 "💰 Preço": preco_para_texto(info["PrecoPorLoja"][loja]),
-                "🏷️ Oferta": oferta_para_texto(
+                "🏷️ Clube": oferta_para_texto(
                     info["OfertaPorLoja"][loja], info["PrecoOfertaPorLoja"][loja]
                 ),
                 "📅 Dt R$": data_preco_para_texto(info["DataPrecoPorLoja"][loja]),
@@ -1163,7 +1163,7 @@ def mostrar_resultado(codigo_busca: str, registrar_historico: bool):
         ]
         linhas_tabela.append({
             "Loja": "Total", "📦 Estoque": info["EstoqueTotal"], "💰 Preço": "",
-            "🏷️ Oferta": "", "📅 Dt R$": "",
+            "🏷️ Clube": "", "📅 Dt R$": "",
         })
         tabela_combinada = pd.DataFrame(linhas_tabela).set_index("Loja")
         st.dataframe(tabela_combinada, use_container_width=True, column_config=_CONFIG_COLUNAS_TABELA_LOJA)
@@ -1262,14 +1262,14 @@ if st.session_state.historico_scans:
                     "Loja": loja,
                     "📦 Estoque": estoque_h.get(loja, ""),
                     "💰 Preço": preco_h.get(loja, ""),
-                    "🏷️ Oferta": oferta_h.get(loja, ""),
+                    "🏷️ Clube": oferta_h.get(loja, ""),
                     "📅 Dt R$": data_preco_h.get(loja, ""),
                 }
                 for loja in LOJAS_NOMES
             ]
             linhas.append({
                 "Loja": "Total", "📦 Estoque": estoque_h.get("Total", ""), "💰 Preço": "",
-                "🏷️ Oferta": "", "📅 Dt R$": "",
+                "🏷️ Clube": "", "📅 Dt R$": "",
             })
             st.dataframe(
                 pd.DataFrame(linhas).set_index("Loja"),
